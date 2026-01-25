@@ -1,0 +1,697 @@
+---
+title: "Manuscript Journal of environmental psychology"
+author: "Lukáš Hejtmánek"
+format: 
+  html:
+    self-contained: true
+    page-layout: full
+execute:
+  echo: false
+  warning: false
+  message: false
+---
+
+# Manuscript report
+
+```{r basic loading}
+#| echo: false
+library(tidyverse)
+library(report)
+library(gt)
+library(here)
+library(papaja)
+library(lmerTest)
+library(correlation)
+library(tidyr)
+library(performance)
+here::i_am("reports/manuscript/manuscript.qmd")
+
+source(here("reports/elements/loading-preprocessing.R"))
+source(here("reports/elements/colors-labels.R"))
+source(here("reports/elements/analytical-help.R"))
+
+load(here::here("temp/df_forest.RData"))
+
+POSITIVE_SCALES <- c("relax_ros", "POMS_vitality", "ros", "vitality")
+
+# Removing unnecessary columns
+df_forest <- remove_unnecessary_columns(df_forest)
+df_forest <- add_first_condition(df_forest)
+
+bad_participants <- get_participants_without_both_sessions(df_forest)
+df_forest <- filter(df_forest, !(ID %in% bad_participants))
+
+df_measures_original <- format_important_measures(df_forest)
+df_measures <- scale_measures(df_measures_original) %>%
+  filter_measures()
+```
+
+
+# Preprocessing
+
+```{r count removed values}
+df_removed <- df_measures %>%
+  count(what) %>%
+  right_join(count(df_measures_original, what), by = "what",
+    suffix = c("_filtered", "_original")) %>%
+  mutate(removed = n_original - n_filtered,
+         removed_percent = removed / n_original * 100)
+```
+
+A total of `r length(bad_participants)` participants were removed from the analysis because their questionnaires were lost.
+
+Values larger than 3 standard deviations from the mean were removed from the analysis. This affected a total of `r sum(df_removed$removed)` values across all the outcome measures, which is `r round(sum(df_removed$removed_percent)/nrow(df_removed), 3)`% of the original data.
+
+# Participants report
+
+```{r participant report, results="asis"}
+participant_data <- filter(df_forest, sessionNumber == 1) %>%
+  select(Age = age, Sex = gender) %>%
+  mutate(Sex = recode(Sex, "female"="F", "male"="M"))
+print(report_participants(participant_data, spell_n = TRUE))
+```
+
+```{r participant demographics, eval = FALSE}
+df_forest$educationCurrent
+```
+
+# Pre checks
+
+## Normality tests
+
+Although almost all the normality tests (except for physiological measures) suggest that the data do not follow a normal distribution, the QQ plots suggest that these deviations are not severe QQ plots can be found in the supplemental materials (Supplemental XY). To simplify the results communication we opted to use linear mixed effect models across all the parameters without any transformation of the original values. The only scales, where we are aware of non-normality,  are POMS scales of anger, confusion and depression, which are strongly zero-inflated. 
+
+## Physiological and psychological relationship
+
+```{r, resutls="hide", eval = FALSE}
+report_statistics(cor.test(df_forest$POMS_vitality_diff, 
+  df_forest$blood_pulse_diff, use = "complete.obs"))
+```
+
+To investigate the relationship between the psychological nad physiological measures, we computed the correlation between the difference in the measures from before and after the session.
+
+We did not use any correction for multiple comparisons because we wanted to see if there is any relationship between the measures to prevent us from using them in the analysis. However, only the correlation between the POMS vitality and blood pulse was significant and small (`r report_statistics(cor.test(df_forest$POMS_vitality_diff, df_forest$blood_pulse_diff, use = "complete.obs"))`). This overall suggests that the physiological and psychological measures were not strongly related and both should be used in the analysis and in the studies going forward. All correlations between psychological and physiological measures can be found in the supplemental materials (Supplemental XY).
+
+# Descriptive statistics
+
+Overall descriptive results from all areas of interest can be seen in Tab XY. 
+
+```{r measures comparison table, echo=FALSE}
+# This is a weird hack to get the table to work
+df_comparison_table <- df_measures %>%
+  group_by(what, when, condition, category) %>%
+  summarise(Mean = mean(value, na.rm = TRUE), 
+            SD = sd(value, na.rm = TRUE),
+            MeanSD = paste0(round(Mean, 3), " (", round(SD, 3), ")"))%>%
+  select(-c(Mean, SD)) %>%
+  ungroup() %>%
+  pivot_wider(names_from = c(when, condition), values_from = c(MeanSD))
+```
+
+```{r measures comparison table descriptives no tests, eval = FALSE}
+## This table is redundant when wer report the T-test table below
+df_comparison_table %>%
+  mutate(what = relabel(what, measures_labeller)) %>%
+  group_by(category) %>%
+  gt() %>%
+    tab_header(title = "Table 1: Descriptive statistics of the measures of interest",
+      subtitle = "Reported as Mean (SD). Split by condition (Real vs Virtual forest)") %>%
+    fmt_number(columns = where(~ is.numeric(.x)), decimals = 3) %>%
+    tab_spanner(label = "Virtual forest", columns = ends_with("VR")) %>%
+    tab_spanner(label = "Real forest", columns = ends_with("les")) %>%
+    cols_move_to_end(columns=ends_with("VR"))
+```
+
+## Simple comparisons
+
+```{r comparison table with t-tests}
+df_comparison_t <- df_measures %>%
+  select(-z_value) %>%
+  pivot_wider(values_from = value, names_from = when) %>%
+  group_by(what, condition) %>%
+  group_modify(~t_test_with_effect_table_paired(.x$pre, .x$post)) %>%
+  ungroup()
+
+df_comparison_t %>%
+  select(-c(t.value, df, cohen.d.ci)) %>%
+  pivot_wider(names_from = condition, values_from = -c(what)) %>%
+  select(-starts_with("condition")) %>%
+  left_join(df_comparison_table, by = "what") %>%
+  mutate(what = relabel(what, measures_labeller)) %>%
+  select(what, starts_with("pre"), starts_with("post"), everything()) %>%
+  group_by(category) %>%
+  gt() %>%
+    tab_header(title = "Table 1: Descriptive statistics of the measures of interest",
+      subtitle = "Reported as Mean (SD). Split by condition (Real vs Virtual forest)") %>%
+    fmt_number(columns = where(~ is.numeric(.x)), decimals = 3) %>%
+    cols_move_to_end(columns=ends_with("VR"))  %>%
+    tab_spanner(label = "Virtual forest", columns = ends_with("VR")) %>%
+    tab_spanner(label = "Real forest", columns = ends_with("les")) 
+```
+
+We can see, that in most measures, we have seen improvement in the post session in both VR and virtual forests, with the exception of physiological blood pressures, which improved only in the real forest. The effect sizes of the changes are generally small to medium in both modalities.
+
+## Better or worse?
+```{r binary-improvement-analysis}
+df_binary_comparisons <- df_forest %>%
+  select(ID, condition, ends_with("_diff")) %>%
+  pivot_longer(cols=-c(ID, condition), names_to="what", values_to="value") %>%
+  pivot_wider(names_from = condition, values_from = value, id_cols = c(ID, what)) %>%
+  mutate(what = str_remove(what, "_diff")) %>%
+  mutate(les_improvement_score = ifelse(what %in% POSITIVE_SCALES, les, -les),
+         VR_improvement_score = ifelse(what %in% POSITIVE_SCALES, VR, -VR),
+         modalities_diff = les_improvement_score - VR_improvement_score,
+         better_modality = 
+          case_when(modalities_diff == 0 ~ "Equal",
+                    modalities_diff > 0 ~ "Forest",
+                    modalities_diff < 0 ~ "VR"),
+        les_change = case_when(les_improvement_score == 0 ~ "equal",
+                               les_improvement_score > 0 ~ "improved",
+                               les_improvement_score < 0 ~ "worsened"),
+        VR_change = case_when(VR_improvement_score == 0 ~ "equal",
+                               VR_improvement_score > 0 ~ "improved",
+                               VR_improvement_score < 0 ~ "worsened"))
+
+df_binary_comparisons_counts <- df_binary_comparisons %>%
+  group_by(what) %>%
+  count(better_modality) %>%
+  pivot_wider(names_from = better_modality, values_from = n) %>%
+  ungroup() %>%
+  rename(Missing = `NA`) %>%
+  replace_na(list(Forest = 0, VR = 0, Equal = 0, Missing = 0))
+```
+
+To simplify the outcome, we decided, similarly to our pilot study, to ask if the outcome measure was better or worse than before the experience. This binary approach does not care about outliers, so all values, including those previously discarded, have been used in these estimates. The number of participants who benefited from the experience or who worsened can be found in table XY. 
+
+```{r improvement-summary-table}
+df_binary_comparisons %>%
+  filter(!is.na(modalities_diff)) %>%
+  select(ID, what, ends_with("change")) %>%
+  pivot_longer(cols = ends_with("change"), names_to = "modality", values_to = "change") %>%
+  mutate(modality = str_remove(modality, "_change")) %>%
+  group_by(what, modality) %>%
+  mutate(n_total = n()) %>%
+  ungroup() %>%
+  group_by(what, modality, change) %>%
+  mutate(n = n()) %>%
+  select(-ID) %>%
+  distinct() %>%
+  pivot_wider(names_from = change, values_from = n, values_fill = 0) %>%
+  mutate(out = str_glue("{improved}/{equal}/{worsened} ({round(improved/n_total, 4) * 100}%/{round(equal/n_total, 4) * 100}%/{round(worsened/n_total, 4) * 100}%)"),
+         n_total = NULL, improved = NULL, equal = NULL, worsened = NULL) %>%
+  pivot_wider(names_from = c(modality), values_from = out) %>%
+  mutate(what = relabel(what, measures_forest_labeller)) %>%
+  ungroup() %>%
+  gt() %>%
+    tab_header(title = "Number of participants who improved or worsened in each measure",
+              subtitle = "Data in improved/equal/worsened order") %>%
+    cols_label(les = "Real forest", 
+               VR = "Virtual forest",
+               what = "Measure")
+```
+
+# Analysis of forest bathing efficiency
+
+```{r analytical functions}
+compare_pre_post <- function(data, correction = "fdr") {
+  res <- data %>%
+    pivot_wider(names_from = when, values_from = value) %>%
+    group_by(condition, category, what) %>%
+    group_modify(~report_table(t.test(.x$post, .x$pre, paired = TRUE)), .keep=TRUE) %>%
+    ungroup() %>%
+    select(-c(Parameter, Group, Method, Alternative, CI, df_error), -starts_with("d_CI")) %>%
+    mutate(p = apa_p(p.adjust(p, method = correction)))
+  return(res)
+}
+
+compare_conditions <- function(data, correction = "fdr") {
+  res <- data %>%
+    pivot_wider(names_from = when, values_from = value) %>%
+    group_by(what) %>%
+    group_modify(~broom::tidy(lm(post ~ pre + condition, data =.)), .keep=TRUE) %>%
+    ungroup() %>%
+    filter(term == "conditionVR") %>%
+    select(-term) %>%
+    # run multiple corrections for multiple comparisons
+    mutate(p.value = apa_p(p.adjust(p.value, method = "fdr")))
+  
+  m <- data %>%
+    pivot_wider(names_from = when, values_from = value) %>%
+    group_by(what) %>%
+    group_map(~list(mod = lm(post ~ pre + condition, data =.), name=.$what[1]), .keep=TRUE) %>%
+    magrittr::set_names(map_chr(., ~.$name)) %>%
+    map(~.$mod)
+  return(list(table = res, models = m))
+}
+
+apa_parameter <- function(models, outcome, parameter) {
+  apa_print(models[[outcome]])$full_result[[parameter]]
+}
+```
+
+To investigate both the effect of the intervention as well as the effect of the medium while controlling for the effect of the participant, we used linear mixed-effect models. We modeled the outcome measure score as a function of the condition (virtual and the real forest), the time of the measurement (before and after the session), and their interaction as fixed effects and participants (only intercept) as random effects. This allows us to determine both the overall efficiency of the intervention on a given measure, the overall effect of the condition, and the intervention efficiency difference between the conditions (the interaction between the condition and the time of the measurement). The results of these models are all listed in Table XYXY.
+
+```{r lmer model figuring out the importance of the medium}
+lmer_table <- df_measures %>%
+  group_by(what) %>%
+  group_modify(~report_table(lmer(value ~ when*condition + (1|ID), data =.)), .keep=TRUE) %>%
+  ungroup()
+ 
+lmer_models <- df_measures %>%
+  group_by(what) %>%
+  group_map(~list(mod = lmer(value ~ when*condition + (1|ID), data =.), name=.$what[1]), .keep=TRUE) %>%
+  magrittr::set_names(map_chr(., ~.$name)) %>%
+  map(~.$mod)
+
+lmer_table %>%
+  filter(Effects == "fixed") %>%
+  select(what, Parameter, Coefficient, t, p) %>%
+  mutate(what = relabel(what, measures_labeller)) %>%
+  gt(rowname_col = "what") %>%
+    tab_header(title = "Effect of session and condition on the outcome measures",
+    subtitle = "Linear mixed effect model with time of measurement (before X after the session) and condition (Real X Virtual forest) as fixed effects. The participant’s intercept is a random effect") %>%
+    fmt_number(columns = where(~ is.numeric(.x)), decimals = 3) %>%
+    tab_row_group(label = "Physiological", rows = c(matches("blood"), matches("Pulse"))) %>%
+    tab_row_group(label = "POMS", rows = c(matches("POMS"))) %>%
+    tab_row_group(label = "Restoration outcome", rows = c(matches("Restoration")))
+```
+
+We observed that forest bathing, in general, seems to be an efficient means of reducing the confusion (`r apa_parameter(lmer_models, "confusion", "whenpost")`), fatigue (`r apa_parameter(lmer_models, "fatigue", "whenpost")`), heart rate (`r apa_parameter(lmer_models, "pulse", "whenpost")`), and tension (`r apa_parameter(lmer_models, "tension", "whenpost")`). 
+
+We also observed increased levels of relaxation/restoration (`r apa_parameter(lmer_models, "ros", "whenpost")`), and (`r apa_parameter(lmer_models, "ros", "conditionVR")`), replicating our previous findings.
+
+We saw no effects in changes in POMS vitality (`r apa_parameter(lmer_models, "vitality", "whenpost")`) and no overall decrease of systolic (`r apa_parameter(lmer_models, "sys", "whenpost")`) nor diastolic (`r apa_parameter(lmer_models, "dia", "whenpost")`) blood pressure.
+
+We observed a significant effect of the interaction between the condition and the intervention of the measurement on the diastolic pressure (`r apa_parameter(lmer_models, "dia", "whenpost_conditionVR")`) and trending relationship with systolic pressure (`r apa_parameter(lmer_models, "sys", "whenpost_conditionVR")`), with people in the virtual forest showing improved physiological measures after intervetion and no change observed in the real forest.
+
+We also observed slightly lower systolic blood pressure in partcipants in the virtual forest condition (`r apa_parameter(lmer_models, "sys", "conditionVR")`), but also higher heartrate (`r apa_parameter(lmer_models, "pulse", "conditionVR")`), as well as increased POMS tension (`r apa_parameter(lmer_models, "tension", "conditionVR")`) and depression (`r apa_parameter(lmer_models, "depression", "conditionVR")`) and decreased restoration outcome (`r apa_parameter(lmer_models, "ros", "conditionVR")`)
+
+# Predicting the effect of VR based on the real forest experience
+
+```{r vr-forest-correlation-data}
+df_forest_diff_wide <-select(df_forest, ID, condition, ends_with("_diff")) %>%
+  pivot_longer(cols=-c(ID, condition), names_to="measure", values_to="value") %>%
+  group_by(measure) %>%
+  filter(abs(scale(value)) < 3) %>%
+  ungroup() %>%
+  pivot_wider(names_from = condition, values_from = value, id_cols = c(ID, measure))
+```
+
+One of the main questions of this study was whether the VR experience can be used as a proxy for the real forest experience. To achieve this, we calculated pearson correlation between the VR and the real forest measures for each individual. These correlations are listed in the Table XY.
+
+```{r correlation-unused-code, eval = FALSE}
+select(df_forest, ID, condition, ends_with("_diff")) %>%
+  pivot_longer(cols=-c(ID, condition), names_to="measure", values_to="value") %>%
+  group_by(measure) %>%
+  filter(abs(scale(value)) < 3) %>%
+  ungroup() %>%
+  pivot_wider(names_from = condition, values_from = value, id_cols = c(ID, measure)) %>%
+  group_by(measure) %>%
+  group_modify(~report_table(cor.test(.x$VR, .x$les)), .keep=TRUE) %>%
+  ungroup() %>%
+  select(-c(Parameter1, Parameter2, Method, Alternative, df_error,t), -matches("CI")) %>%
+  mutate(p = apa_p(p.adjust(p, method = "fdr")))
+```
+
+```{r correlation-function-and-tables}
+calculate_condition_cor <- function(data, suffix = "", method = "pearson") {
+  cor_tab <- data %>%
+    pivot_longer(cols=-c(ID, condition), names_to="measure", values_to="value") %>%
+    group_by(measure) %>%
+    filter(abs(scale(value)) < 3) %>%
+    ungroup() %>%
+    pivot_wider(names_from = condition, values_from = value, id_cols = c(ID, measure)) %>%
+    group_by(measure) %>%
+    group_modify(~report_table(cor.test(.x$VR, .x$les, method = method)), .keep=TRUE) %>%
+    ungroup()
+
+  if (method == "pearson") {
+    cor_tab <- cor_tab %>%
+      select(-c(Parameter1, Parameter2, Method, Alternative, df_error,t), -matches("CI")) %>%
+      mutate(p = apa_p(p.adjust(p, method = "fdr"))) %>%
+      mutate(measure = str_remove(measure, suffix)) %>%
+      # rename columns r and p by adding a suffix to the column name
+      rename_with(~paste0(., suffix), c(r, p))
+  } else {
+    cor_tab <- cor_tab %>%
+      select(-c(Parameter1, Parameter2, Method, Alternative), -matches("CI")) %>%
+      mutate(p = apa_p(p.adjust(p, method = "fdr"))) %>%
+      mutate(measure = str_remove(measure, suffix))
+  }
+  return(cor_tab)
+}
+
+df_condition_pre_cor <- calculate_condition_cor(select(df_forest, ID, condition, ends_with("_pre")), "_pre", "pearson")
+df_condition_post_cor <- calculate_condition_cor(select(df_forest, ID, condition, ends_with("_post")), "_post", "pearson")
+df_condition_diff_cor <- calculate_condition_cor(select(df_forest, ID, condition, ends_with("_diff")), "_diff", "pearson")
+
+df_condition_pre_cor %>%
+  left_join(df_condition_post_cor, by = "measure") %>%
+  left_join(df_condition_diff_cor, by = "measure") %>%
+  mutate(measure = relabel(measure, measures_forest_labeller)) %>%
+  gt() %>%
+    tab_header(title = "Correlation between individual measures in VR and the Forest",
+              subtitle = "Pearson correlation calculated on Corrected for multiple comparisons.") %>%
+    tab_footnote(
+      footnote = "Correlation was computed on the difference between the pre and post scores ",
+      locations = cells_column_labels(columns = c(r_diff))
+    ) %>%
+    tab_footnote(
+      footnote = "Correlation was computed on the scores after the intervention",
+      locations = cells_column_labels(columns = c(r_post))
+    ) %>%
+    tab_footnote(
+      footnote = "correlation was computed on the scores before the intervention",
+      locations = cells_column_labels(columns = c(r_pre))
+    ) %>%
+    tab_footnote(
+      footnote = "Corrected for multiple comparisons using the FDR method within the particular measure (PRE/POST/DIFF)",
+      locations = cells_column_labels(columns = c(p_post, p_diff, p_pre))
+    ) %>%
+    fmt_number(columns = where(~ is.numeric(.x)), decimals = 3)
+```
+
+There is a moderate to high correlation between virtual and real forest before the session, which is to be expected, as people will have similar biological and psychological baselines. The correlations between the final scores were slightly lower but moderate and significant. This suggests that participants left the virtual and real experiences in a similar state. Interestingly, the correlation between the changes in the outcome measures was much weaker, and after correcting for multiple comparisons, the small to medium effects did not reach significance. 
+
+While the linear mixed effect models did not find strong differences between the conditions, and we observed the outcomes to be comparable between real and virtual sessions, this suggests that the specific mood shifts, changes in restoration, or physiological states are not uniform between virtual and real forests and both conditions work slightly differently for different people.
+
+These results suggest that the VR experience is not a perfect proxy for the real forest experience, but it works better for some people and worse for others.
+
+## Concordance within subject
+
+Again to simplify the variable results, we labled each intervention change as either concordant (both conditions improved) or disconcordant (one improved and the other one stayed equal or worsened) and simply counted the number of occurances of each. We then computed the chi-square test between the concordant and disconcordant groups for each measure. The results of these tests can be found in the Table XY.
+
+```{r concordance-analysis}
+df_concordant <- df_binary_comparisons %>%
+  mutate(les_VR_concordant = les_change == VR_change,
+         les_VR_concordant_state = les_change) %>%
+  filter(!is.na(les_VR_concordant)) %>%
+  count(what, les_VR_concordant) %>%
+  pivot_wider(names_from = les_VR_concordant, values_from = n, names_prefix = "concordant_")
+
+df_concordant %>%
+  group_by(what) %>%
+  # calculate chi square test on each group between Forest and VR columns
+  group_modify(~broom::tidy(chisq.test(.x[,c("concordant_TRUE", "concordant_FALSE")], correct = FALSE)), .keep=TRUE) %>%
+  ungroup() %>%
+  select(what, statistic, p.value) %>%
+  mutate(p.value = apa_p(p.adjust(p.value, "fdr"))) %>%
+  right_join(df_concordant) %>%
+  relocate(starts_with("concordant"), .before = statistic) %>%
+  mutate(what = relabel(what, measures_forest_labeller),
+         total = concordant_TRUE + concordant_FALSE,
+          concordant_disconcordant = str_glue("{concordant_TRUE}/{concordant_FALSE}"),
+          concordant_percent = str_glue("{round(concordant_TRUE/total, 4)*100}%")) %>%
+  select(-c(total, concordant_TRUE, concordant_FALSE)) %>%
+  gt() %>%
+    tab_header(title = "Number of participants who had the same results in both conditions",
+              subtitle = "Participants either improved or worsened in both conditions") %>%
+    # rename concordant columns
+    cols_label(concordant_disconcordant = "Concordant/Disconcordant", concordant_percent = "Concordant percent", what = "Measure") %>%
+    # change orde of columns
+    cols_move(columns = c(concordant_disconcordant, concordant_percent), after = what) %>%
+    fmt_number(columns = c(statistic), decimals = 3) %>%
+    tab_footnote(footnote = "Chi square test between the concordant and disconcordant columns", 
+                locations = cells_column_labels(columns = statistic)) %>%
+    tab_footnote(footnote = "Corrected for multiple comparisons using FDR correction",
+                locations = cells_column_labels(columns = p.value))
+```
+
+We can see that there is not a strong concordance between the conditions. While the restoration outcome and heart rate are trending towards strong concordance, all variable more or less follow the results from the correlational comparison,suggesting that VR and real forest interventions are not perfect proxies for each other and they might work differently for different people.
+
+# Extraneous variables
+
+We have also explored a multitude of extraneous variables which we assumed might have affected the outcome and the efficacy of the intervention. As a rule, we have modeled each of the outcome measures separately. Unless explicitly stated, we have not conducted multiple comparison corrections in these tests to detect all variables potentially affecting the results so that any researcher may pay attention to them in future studies. We have also explored multitude of extraneous variables which we assumed might have affected the final outcome and the efficacy of the intervention.
+
+## Effect of gender
+
+As there are physiological differences between genders in blood pressure and heart rate and potential differences in how they report emotional states, we investigated what effect gender has on the outcome measures. We have used mixed-effect models with the condition, gender and their interaction, and time of measurement as fixed effects and participant as random effects.
+
+```{r sex mixed model overview}
+df_measures_sex <- df_measures %>%
+  left_join(distinct(select(df_forest, ID, gender)), by="ID") 
+```
+
+```{r sex mixed model all, eval = FALSE}
+lmer_table_gender <- df_measures_sex %>%
+  group_by(what) %>%
+  group_modify(~report_table(lmer(value ~ when + gender*condition + (1|ID), data =.)), .keep=TRUE) %>%
+  ungroup()
+
+lmer_table_gender %>%
+  filter(Effects == "fixed") %>%
+  filter(Parameter %in% c("gender [male]", "gender [male] × condition [VR]")) %>%
+  select(what, Parameter, Coefficient, starts_with("CI"), t, p) %>%
+  group_by(what) %>%
+  mutate(p = apa_p(p)) %>%
+  gt()
+```
+
+```{r sex difference, eval = FALSE}
+t_gender_sys <- create_post_table(df_measures, df_forest, "gender") %>%
+  filter(what == "sys") %>%
+  with(t.test(value ~ variable))
+```
+
+```{r sex mixedmodel individual}
+lmer_sex_vitality <- lmer(value ~ when + gender*condition + (1|ID), data = filter(df_measures_sex, what == "vitality"))
+lmer_sex_sys <- lmer(value ~ when + gender*condition + (1|ID), data = filter(df_measures_sex, what == "sys"))
+lmer_sex_pulse <- lmer(value ~ when + gender*condition + (1|ID), data = filter(df_measures_sex, what == "pulse"))
+```
+
+We found an expected effect of gender on systolic blood pressure (`r apa_print(lmer_sex_sys)$full_result$gendermale`). We also found a significant interaction between gender and condition on POMS vitality (`r apa_print(lmer_sex_vitality)$full_result$gendermale_conditionVR`), with men in VR scoring slightly less on this scale, and heart rate, where men had slightly lower pulse overall, but significantly higher in VR sessions (`r apa_print(lmer_sex_pulse)$full_result$gendermale_conditionVR`). 
+
+No other differences between genders were found, and these found effects would not survive correction for multiple comparisons. Overall, we believe that gender has not been a determining factor of forest bathing efficacy, at least in the psychological measures.
+
+## Checking the before-session differences
+
+```{r before session differences, eval = FALSE}
+df_measures %>%
+  filter(when == "pre") %>%
+  group_by(what) %>%
+  group_modify(~broom::tidy(t.test(value ~ condition, data = .x)), .keep=TRUE) %>%
+  ungroup() %>%
+  select(-c(method, alternative, parameter), -starts_with("conf")) %>%
+  mutate(p.value = apa_p(p.value),
+         what = relabel(what, measures_labeller)) %>%
+  rename(difference = estimate, Real_forest = estimate1, VR_forest = estimate2)
+```
+
+In our previous research, we noticed that people in the different groups had different starting baselines. Participants in the VR condition generally started as more relaxed, as the necessity to travel to a forest might have induced some stress and unease. Therefore, we checked for any difference in the before-session values between the conditions. However, we did not find significant differences between VR and real forests before the intervention in any of the measures (the comparisons can be found in the supplemental materials). We believe that this might have resulted from a unified starting procedure, where we required participants to travel similarly to each location and fully randomized order of conditions.
+
+## Airplanes 
+
+```{r airplanes, eval = FALSE}
+create_post_table(df_measures, df_forest, "airplanes") %>%
+  group_by(what) %>%
+  group_modify(~broom::tidy(lm(value ~ variable*condition, data = .x)), .keep=TRUE) %>%
+  filter(term == "variable" | term == "variable:conditionVR")
+```
+
+In the methods section, we described the problem of the forest location being close to the airport and therefore noting the number of airplanes going over, as well as adding sounds of airplanes to the VR experience. We have also explored the effect of the number of airplanes going over the testing site (or sounds played during the VR session) on the outcome measures. We modeled the intervention change in each measure as a function of the number of airplanes going over the testing site (or sounds played during the VR session) and its interaction with the condition and found no significatn effects.
+
+## Cybersickness
+
+In our previous study, we explored the effect of the simulator sickness on the results. We found that the simulator sickness was related to the change in the restoration outcome. We have therefore explored the relationship between the simulator sickness ad our final measures.
+
+```{r ssq subscales correlation}
+cor_ssq_ocu_dis <- cor.test(df_forest$ssq_kim_oculomotor,
+                            df_forest$ssq_kim_disorientation, 
+                            use = "complete.obs")
+```
+
+We have used the recommended scales of oculomotor and disorientation (Kim et al., 2018) to measure cybersickness, in contrast to the standard SSQ subscales. Unfortunately, these scales in our dataset are still quite correlated (`r report_statistics(cor_ssq_ocu_dis)`) and so the interpretation of the results should be cautious.
+
+```{r ssq measures}
+df_ssq_measures <- df_measures %>%
+  filter(condition == "VR") %>%
+  left_join(select(df_forest, ID, condition,
+    ssq_disorientation = ssq_kim_disorientation, 
+    ssq_oculomotor = ssq_kim_oculomotor), by = c("ID", "condition")) %>%
+  select(-c(category, z_value, condition)) %>%
+  pivot_longer(-c(ID, what, when, value), names_to = "ssq_scale", values_to = "ssq_value")
+
+ssq_measure_models <- df_ssq_measures %>%
+  pivot_wider(names_from = ssq_scale, values_from = ssq_value) %>%
+  filter(when == "post") %>%
+  group_by(what) %>%
+  group_map(~list(mod = lm(value ~  ssq_disorientation + ssq_oculomotor, data =.), name=.$what[1]), .keep=TRUE) %>%
+  magrittr::set_names(map_chr(., ~.$name)) %>%
+  map(~.$mod)
+
+```
+
+We have modeled the final score of each measure using linear regression with both Oculomotor and Disorientation scores as predictors. We have found that the Oculomotor scale significantly predicts the post values in the POMS fatigue (`r apa_print(ssq_measure_models$fatigue)$full_result$ssq_oculomotor`), vitality (`r apa_print(ssq_measure_models$vitality)$full_result$ssq_oculomotor`) and the restoration outcome scores as well (`r apa_print(ssq_measure_models$ros)$full_result$ssq_oculomotor`) replicating our discovery from the pilot study.
+
+## Personality
+
+We have also explored the idea that the participant’s personality can drive the efficiency of the digital version. We tested the open-mindedness (Openness in traditional Big5) score from the BFI scale on the final outcome, as we expected more open-minded people to digest the VR condition better. We also explored the effect of the negative emotionality score (Neuroticism in the classical Big5 naming).
+
+```{r personality}
+df_measures_personality <- df_measures %>%
+  left_join(distinct(select(df_forest, ID, condition, openmindedness, negativeemotionality)), by=c("ID", "condition")) %>%
+  pivot_longer(cols = c(openmindedness, negativeemotionality), names_to = "big5_scale", values_to="big5_value")
+
+correlations_negative <- df_measures_personality %>%
+  filter(when == "post", big5_scale == "negativeemotionality") %>%
+  group_by(what) %>%
+  group_map(~list(mod = cor.test(.$value, .$big5_value), name=.$what[1]), .keep=TRUE) %>%
+  magrittr::set_names(map_chr(., ~.$name)) %>%
+  map(~.$mod)
+
+lm_negative <- df_measures_personality %>%
+  filter(big5_scale == "negativeemotionality" , when == "post") %>%
+  group_by(what) %>%
+  group_map(~list(model = lm(value ~ big5_value * condition , data =.), name = .$what[1]), .keep=TRUE) %>%
+  magrittr::set_names(map_chr(., ~.$name)) %>%
+  map(~.$model)
+```
+
+```{r personality table, eval = FALSE}
+df_measures_personality %>%
+  filter(big5_scale %in% c("negativeemotionality", "openmindedness"), when == "post") %>%
+  group_by(what, big5_scale) %>%
+  group_modify(~broom::tidy(lm(value ~ big5_value * condition , data =.)), .keep=TRUE) %>%
+  ungroup() %>%
+  group_by(big5_scale) %>%
+  mutate(p.value = apa_p(p.value)) %>%
+  gt() %>%
+    tab_header(title = "Coefficients of a Linear model of the effect of the personality on the outcome measures",
+      subtitle = "Not corrected for multiple comparisons") %>%
+    fmt_number(columns = where(~ is.numeric(.x)), decimals = 3)
+```
+
+We modeled each of the two personality scales separately. We estimated the final scores as a function of condition, personality score, and their interaction. We found a small effect on POMS confusion (`r apa_print(lm_negative$confusion)$full_result$big5_value`) and depression (`r apa_print(lm_negative$depression)$full_result$big5_value`), which is not surprising giving the construct similarity of the scales. We also found relationship between negative emotionality and the final ROS (`r apa_print(lm_negative$ros)$full_result$big5_value`), and POMS vitality (`r apa_print(lm_negative$vitality)$full_result$big5_value`). The openmindedness score in the VR condition did not correlate with either outcome measure.
+
+## Effect of session order
+
+```{r session order, eval = FALSE}
+df_measures %>%
+  left_join(distinct(select(df_forest, ID, condition, sessionNumber)), by=c("ID", "condition")) %>%
+  group_by(what) %>%
+  group_modify(~report_table(lmer(value ~ when + condition*sessionNumber + (1|ID), data = .))) %>%
+  filter(!is.na(Parameter), !is.na(p)) %>%
+  ungroup() %>%
+  mutate(p = apa_p(p)) %>%
+  arrange(p) %>%
+  gt() %>%
+    tab_header(title = "Coefficients of a Linear model of the effect of the order on the post session values",
+      subtitle = "Corrected for multiple comparisons using FDR") %>%
+    fmt_number(columns = where(~ is.numeric(.x)), decimals = 3)
+```
+
+While we matched the first starting condition relatively well (16 people had virtual forest as a first session compared to 22 in the real forest), it was possible that the second session might have been important. To investigate this possibility, we have modeled the final score of each measure using mixed-effect models with both the order of the session, condition and their interaction, and time of measurement as fixed effects. We have found no significant effect of the order of the sessions on any of the measures, and neither were the interactions with the condition significant. This suggests that there was no major way in which the results of one session affected the results of the other.
+
+## Presence
+
+```{r presence}
+df_measures_presence <- df_measures %>%
+  left_join(select(df_forest, ID, condition, starts_with("experience"), 
+    experience_total = immersion_total), by=c("ID", "condition")) %>%
+  filter(condition == "VR", when == "post")
+lm_anger_presence <- lm(value ~ experience_total, data = filter(df_measures_presence, what == "anger"))
+```
+
+```{r presence table, eval = FALSE}
+df_measures_presence %>%
+  filter(!is.na(experience_total)) %>%
+  group_by(what) %>%
+  group_modify(~broom::tidy(lm(value ~ experience_total, data = .x)), .keep=TRUE)  %>%
+  ungroup() %>%
+  mutate(p.value = apa_p(p.value)) %>%
+  filter(term == "experience_total") %>%
+  gt()
+```
+
+We wanted to see if the level of reported presence corresponded to the larger gains in the VR condition. We have modeled the final scores of each measure using linear regression with the total immersion score as a predictor. We found a small, negative effect of the total immersion score on the final value of POMS anger (`r apa_print(lm_anger_presence)$full_result$experience_total`). This suggests that the more immersed the participant felt, the less angry they felt after the session, but this effect did not survive correction for multiple comparisons and the scale is strongly zero-inflated. Overall, we do not believe that the level of reported presence was a determining factor of the efficacy of the virtual forest bathing.
+
+## Similarity of the environments
+
+```{r comparability session comparison data, eval = TRUE}
+df_similarity_measures <- df_forest %>%
+  filter(session == 2) %>%
+  select(ID, first_condition, starts_with("forestFeel")) %>%
+  left_join(df_measures, by=c("ID")) %>%
+  filter(when == "post", condition == "VR")
+
+lm_anger_similarity_visual <- lm(value ~ forestFeelVisual, data = filter(df_similarity_measures, what == "anger"))
+```
+
+```{r comparability session comparison, eval = FALSE}
+df_similarity_measures %>%
+  group_by(ID) %>%
+  # select first row
+  slice(1) %>%
+  ungroup() %>%
+  pivot_longer(cols = starts_with("forestFeel"), names_to="forestFeel", values_to="forestFeel_value") %>%
+  group_by(forestFeel) %>%
+  group_modify(~broom::tidy(t.test(.$forestFeel_value ~ .$first_condition, data =.)), .keep=TRUE)
+
+df_similarity_measures %>%
+  pivot_longer(cols = starts_with("forestFeel"), names_to="forestFeel", values_to="forestFeel_value") %>%
+  group_by(forestFeel, what) %>%
+  filter(!is.na(forestFeel_value)) %>%
+  group_modify(~broom::tidy(lm(value ~ forestFeel_value, data = .x)), .keep=TRUE) %>%
+  ungroup() %>%
+  group_by(what) %>%
+  filter(term == "forestFeel_value") %>%
+  mutate(p.value = apa_p(p.value)) %>%
+  gt() %>%
+    tab_header(title = "Linear regression of the effect of the comparability on the post session values",
+      subtitle = "Only VR condition") %>%
+    fmt_number(columns = where(~ is.numeric(.x)), decimals = 3)
+
+cor.test(~ value + forestFeelVisual, data = filter(df_similarity_measures, what == "anger"), method = "kendall")
+```
+
+After the second session, participants were asked to report how similar the virtual forest was to the real one visualwise, soundwise, and overall. As some people had the real forest as a first session and some as a second session, some people had to compare the real forest from memory, while others had to compare the virtual forest from memory. Therefore, each measure suffers from some form of memory bias. However, we found no difference between participants who had experienced the virtual forest as a first or second condition in either of the three assessments.
+
+We then modeled each measure's final scores using linear regression, with each similarity score (visual, soundwise, and overall) as a predictor. While participants often reported missing real forest features in the open-ended questions, none of the similarity scores significantly increased the outcome measures. The exception was the POMS anger, which seemed to have decreased slightly with increased levels of visual fidelity `r apa_print(lm_anger_similarity_visual)$full_result$forestFeelVisual`. However, similarly to the POMS anger relationship with perceived presence, such results should be evaluated cautiously.
+
+Overall, participants did not need the forest to look or sound the same to benefit from the session.
+
+## Virtual environment fidelity and presence
+
+```{r authenticity-data-prep}
+df_authenticity_post <- df_measures %>%
+  left_join(select(df_forest, ID, condition, session, starts_with("authenticity") ), by=c("ID", "condition")) %>%
+  filter(condition == "VR", when == "post") %>%
+  select(-c(when, condition))
+```
+
+```{r authenticity table, eval = FALSE}
+df_authenticity_post %>%
+  select(-c(what, value, category, z_value)) %>%
+  distinct() %>%
+  pivot_longer(cols = starts_with("authenticity"), names_to="authenticity", values_to="authenticity_value") %>%
+  group_by(authenticity) %>%
+  # do a t test on session comparison
+  group_modify(~broom::tidy(t.test(.$authenticity_value ~ .$session, data =.)), .keep=TRUE)
+
+df_measures %>%
+  left_join(select(df_forest, ID, condition, session, first_condition, starts_with("authenticity")), by=c("ID", "condition")) %>%
+  filter(condition == "VR", when == "post") %>%
+  pivot_longer(cols = starts_with("authenticity"), names_to="authenticity", values_to="authenticity_value") %>%
+  filter(!is.na(authenticity_value)) %>%
+  group_by(what, authenticity) %>%
+  group_modify(~broom::tidy(lm(value ~ authenticity_value, data = .x)), .keep=TRUE) %>%
+  ungroup() %>%
+  filter(term == "authenticity_value") %>%
+  mutate(p.value = apa_p(p.value)) %>%
+  gt() %>%
+    tab_header(title = "Linear regression of the effect of the authenticity on the post session values",
+      subtitle = "Only VR condition. Corrected for multiple comparisons using FDR") %>%
+    fmt_number(columns = where(~ is.numeric(.x)), decimals = 3)
+```
+
+```{r authenticity model}
+lm_ros_overall_authenticity <- lm(value ~ authenticity, data = filter(df_authenticity_post, what == "ros"))
+```
+
+Lastly, we wanted to check the effect of the simulation's fidelity on the outcome. After finishing the virtual session, we asked participants about the fidelity of sounds, visuals, and overall believability on a Likert scale of 1-5. We found no difference between these reported scores between the first and second sessions, suggesting that even those participants who experienced the virtual environment as a second sessiondid not change expectations.
+
+We modeled the outcome measures using linear regression with each fidelity score (visual, soundwise, and overall) as a predictor, similar to the previous analysis. Although we have found the overall auythenticity to be a predictor of the ROS score (`r apa_print(lm_ros_overall_authenticity)$full_result$authenticity`), this would not survive correction for multiple comparisons and other fidelity scores were significant predictors of the outcome measures, so it need to be interpreted with caution.
+
+We have also measured the level of presence using the modified SUS questionnaire, which is not limeted to the visual and auditory fidelity, but also includes questions about the believability of the simulation and its comparability to the experiences in the real counterparts. Modelling the final score as a function of the SUS score did not reveal any significant effects on any of the main measures, suggesting the subjective level of immersion does not affect the efficacy of the intervention, similarly to our results about environmental fidelity.
+
+Overall, we believe that these results suggest that participants did not necessarily need to believe the simulation to be authentic benefit from it.

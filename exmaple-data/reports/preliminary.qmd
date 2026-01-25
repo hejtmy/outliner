@@ -1,0 +1,160 @@
+---
+title: "Preliminary results"
+format: 
+  html:
+    theme: lux
+    embed-resources: true
+    self-contained: true
+---
+
+```{r, echo = FALSE, message = FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo=FALSE, warning=FALSE, message = FALSE)
+library(tidyverse)
+library(lmerTest)
+```
+
+```{r, message=FALSE, warning=FALSE, echo=FALSE}
+load(here::here("temp/df_forest.RData"))
+```
+
+```{r}
+COLORS <- c(les="#04724D", VR="#540C97", neutral="#FFC300")
+
+condition_labeller <- c(
+  "les" = "Real forest",
+  "VR" = "Virtual forest"
+)
+blood_labeller <- c(
+  "sys" = "Systolic blood pressure",
+  "dia" = "Diastolic blood pressure",
+  "pulse" = "Pulse"
+)
+```
+
+```{r}
+df_forest %>%
+  select(ID, condition,
+         starts_with("blood"),
+         -contains("diff")) %>%
+  pivot_longer(-c(ID, condition)) %>%
+  separate(name, c("drop", "what", "when"), sep = "_") %>%
+  mutate(when = factor(when, levels = c("pre", "post"))) %>%
+  ggplot(aes(when, value, color = condition)) +
+    geom_boxplot() +
+    geom_point() +
+    geom_line(aes(group= ID)) +
+    facet_wrap(~condition + what, labeller = labeller(
+      condition = condition_labeller,
+      what = blood_labeller)) +
+    labs(title = "Physiological changes", y = "", x = "") + 
+    scale_color_manual(values=COLORS) +
+    guides(color = "none") +
+    papaja::theme_apa(base_size = 18)
+```
+
+```{r relaxation plot}
+df_forest %>%
+  select(ID, sessionType, relax_pre, relax_post) %>%
+  pivot_longer(-c(ID, sessionType)) %>%
+  separate(name, sep = "_", into = c("what", "when")) %>%
+  mutate(when = factor(when, levels = c("pre", "post"))) %>%
+  ggplot(aes(when, value, color = sessionType)) +
+    geom_boxplot() +
+    geom_point() +
+    geom_line(aes(group = ID)) +
+    facet_wrap(~sessionType, labeller = labeller(sessionType = condition_labeller)) +
+    scale_color_manual(values=COLORS) +
+    labs(title = "Relaxation change from before and after the experience",
+      y = "Relaxation score", x = "") +
+    guides(color = "none") +
+    papaja::theme_apa(base_size = 18)
+```
+
+## Large model
+
+```{r}
+
+```
+
+## Basic comparison
+
+```{r relax comparison}
+df_relax_comparisons <- df_forest %>%
+  select(ID, sessionType, relax_pre, relax_post) %>%
+  mutate(relax_diff = relax_post - relax_pre) %>%
+  select(-c(relax_pre, relax_post)) %>%
+  pivot_wider(names_from = sessionType, values_from = relax_diff) %>%
+  mutate(modalities_diff = les - VR,
+        better_modality = 
+          case_when(modalities_diff == 0 ~ "Equal",
+                    modalities_diff > 0 ~ "Forest",
+                    modalities_diff < 0 ~ "VR")) %>%
+  pivot_longer(-c(ID, modalities_diff, better_modality), 
+    names_to="modality", values_to = "relax_diff") %>%
+  mutate(improved = relax_diff > 0)
+```
+
+```{r relax comparison binary table}
+df_relax_comparisons %>%
+  select(ID, modality, improved) %>%
+  pivot_wider(names_from = modality, values_from = improved) %>%
+  with(., table(les, VR))
+```
+
+```{r}
+ggplot(df_relax_comparisons, aes(modalities_diff)) +
+  geom_histogram(binwidth = 3)
+summary(df_relax_comparisons)
+
+ggplot(df_relax_comparisons, aes(modality, relax_diff, group=ID, color = better_modality)) +
+  geom_line(linewidth = 1.25)
+```
+
+
+```{r relax comparison correlation}
+df_relax_comparisons %>%
+  select(ID, modality, relax_diff) %>%
+  pivot_wider(names_from = modality, values_from = relax_diff) %>%
+  with(., lm(les ~ VR, data=.)) %>%
+  summary()
+
+df_relax_comparisons %>%
+  select(ID, modality, relax_diff) %>%
+  pivot_wider(names_from = modality, values_from = relax_diff) %>%
+  ggplot(aes(les, VR)) + 
+    geom_point() +
+    geom_smooth(method = "lm")
+```
+
+## Personality
+
+```{r}
+df_forest %>%
+  ggplot(aes(openmindedness, relax_diff, color=sessionType)) +
+    geom_point() +
+    geom_smooth(method = "lm") +
+    labs(title = "Openmindedness and relaxation change",
+      x = "Openmindedness score", y = "Relaxation change") +
+    papaja::theme_apa(base_size = 18)
+```
+
+```{r}
+df_forest %>%
+  ggplot(aes(negativeemotionality, relax_diff, color=sessionType)) +
+    geom_point() +
+    geom_smooth(method = "lm") +
+    labs(title = "Negative emotionality and relaxation change",
+      x = "Negative emotionality score", y = "Relaxation change") +
+    papaja::theme_apa(base_size = 18)
+```
+
+```{r}
+cor(df_forest$ssq_nausea, df_forest$relax_diff, use = "complete.obs")
+```
+
+## Large models
+
+```{r}
+lmer(relax_post ~ sessionType + sessionNumber + relax_pre + (1|ID), data = df_forest) %>%
+  summary()
+```

@@ -1,0 +1,151 @@
+---
+title: "Main manuscript"
+author: "Lukáš Hejtmánek"
+format: 
+  html:
+    self-contained: true
+    page-layout: full
+execute:
+  echo: false
+  warning: false
+  message: false
+---
+
+## Basic report
+
+```{r basic loading, }
+#| echo: false
+library(tidyverse)
+library(report)
+library(gt)
+library(here)
+library(papaja)
+library(lmerTest)
+library(correlation)
+library(tidyr)
+library(performance)
+library(gt)
+
+source(here("reports/elements/loading-preprocessing.R"))
+source(here("reports/elements/colors-labels.R"))
+source(here("reports/elements/analytical-help.R"))
+
+here::i_am("reports/manuscript/supplemental.qmd")
+load(here::here("temp/df_forest.RData"))
+
+POSITIVE_SCALES <- c("relax_ros", "POMS_vitality", "ros", "vitality")
+df_forest <- remove_unnecessary_columns(df_forest)
+
+bad_participants <- get_participants_without_both_sessions(df_forest)
+df_forest <- filter(df_forest, !(ID %in% bad_participants))
+
+df_measures_original <- format_important_measures(df_forest)
+df_measures <- scale_measures(df_measures_original) %>%
+  filter_measures()
+```
+
+## Normality tests Supplement 1
+
+```{r qq plots, fig.width=14, fig.height=12}
+df_measures %>%
+  add_diff_measures() %>%
+  mutate(what = relabel(what, measures_labeller),
+    when = relabel(when, when_labeller)) %>%
+  group_by(when, what) %>%
+  ggplot(aes(sample = value, color = when)) +
+    geom_qq() +
+    stat_qq_line() +
+    facet_wrap(~what, scales = "free", nrow = 2) +
+    labs(
+      x = "Theoretical quantiles", 
+      y = "Sample quantiles", 
+      title = "QQ plots for the outcome measures", 
+      subtitle = "Theoretical quantiles are based on the normal distribution",
+      color = NULL
+    ) +
+    theme_apa(base_size = 18) +
+    theme(legend.position = "bottom")
+```
+
+```{r normality tests, results="hide", eval = FALSE}
+df_measures %>%
+  add_diff_measures() %>%
+  group_by(when, what) %>%
+  group_modify(~broom::tidy(shapiro.test(.x$value)), .keep=TRUE) %>%
+  ungroup() %>%
+  mutate(p.value = apa_p(p.value)) %>%
+  gt() %>%
+    tab_header(title = "Shapiro-Wilk normality test for the measures") %>%
+    fmt_number(columns = where(~ is.numeric(.x)), decimals = 3)
+```
+
+## Physiological and psychological relationship Table 1
+
+```{r physiological and psychological relationship}
+psyc_cols <- c("anger", "confusion", "depression", "fatigue", "tension", "ros", "vitality")
+blood_cols <- c("sys", "dia", "pulse")
+
+df_measures %>%
+  filter(when == "post") %>%
+  select(-c(z_value, category, when)) %>%
+  pivot_wider(names_from = what, values_from = value) %>%  
+  correlation(select = blood_cols, select2 = psyc_cols, p_adjust = "none") %>%
+  select(-c(df_error, Method, n_Obs, CI)) %>%
+  mutate(Parameter1 = relabel(Parameter1, measures_labeller),
+    Parameter2 = relabel(Parameter2, measures_labeller)) %>%
+  group_by(Parameter1) %>%
+  gt() %>%
+    tab_header(title = "Correlation between physiological and psychological measures after the forest bathing.",
+              subtitle = "For both virtual and real forestconditions") %>%
+    tab_footnote(
+      footnote = "The p-values are not adjusted for multiple comparisons.",
+      locations = cells_column_labels(columns = c(p))
+    ) %>%
+    fmt_number(columns = where(~ is.numeric(.x)), decimals = 3)
+```
+
+## Before session differences between conditions Table 2
+
+```{r before session differences between conditions, eval = TRUE}
+df_measures %>%
+  filter(when == "pre") %>%
+  group_by(what) %>%
+  group_modify(~broom::tidy(t.test(value ~ condition, data = .x)), .keep=TRUE) %>%
+  ungroup() %>%
+  select(-c(method, alternative, parameter), -starts_with("conf")) %>%
+  mutate(
+    p.value = apa_p(p.value),
+         what = relabel(what, measures_labeller)) %>%
+  rename(difference = estimate, Real_forest = estimate1, VR_forest = estimate2) %>%
+  gt() %>%
+    tab_header(title = "Table 2: Two sample T test comparing VR and real forest conditions in the before session values") %>%
+    tab_footnote(footnote = "Not corrected for multiple comparisons to detect any signs of potential difference.",
+                 locations = cells_column_labels(columns = p.value)) %>%
+    fmt_number(columns = where(~ is.numeric(.x)), decimals = 3)
+```
+
+## Extraneous variables
+
+```{r descriptives extraneous variables}
+df_forest %>%
+  select(ID, condition, starts_with("authenticity"), starts_with("experience"), 
+          starts_with("forestFeel"), immersion_total) %>%
+  pivot_longer(cols = -c(ID, condition), names_to = "variable", values_to = "value") %>%
+  group_by(variable) %>%
+  summarise(Mean = mean(value, na.rm = TRUE), 
+            SD = sd(value, na.rm = TRUE), 
+            MeanSD = paste0(round(Mean, 3), " (", round(SD, 3), ")"),
+            range = paste0(round(min(value, na.rm = TRUE), 3), " - ", round(max(value, na.rm = TRUE), 3))) %>%
+  select(-c(Mean, SD)) %>%
+  ungroup() %>%
+  # rename variables
+  # authenticity to "Overall Fidelity"
+  # experience to "Overall Experience"
+  mutate(variable = relabel(variable, c(authenticity = "Overall Fidelity", authenticity_sound = "Sound Fidelity", authenticity_visual = "Visual Fidelity", 
+                                        immersion_total = "Presence (SUS)", forestFeelAudio = "Similarity of Sound", forestFeelVisual = "Similarity of Visuals",
+                                        forestFeelOverall = "Overall similarity"))) %>%
+  filter(!is.na(variable)) %>%
+  gt() %>%
+    tab_header(title = "Table 3: Descriptive statistics of the extraneous variables",
+      subtitle = "Reported as Mean (SD)")
+```

@@ -1,0 +1,184 @@
+---
+title: "Data checks"
+author: "Lukáš Hejtmánek"
+format: 
+  html:
+    self-contained: true
+---
+
+library(tidyverse)
+library(tidyr)
+library(here)
+
+LOCAL_DATA_PATH <- "data"
+
+source("functions/loading.R", encoding = "UTF-8")
+source("functions/loading-questionnaire.R", encoding = "UTF-8")
+source("functions/loading-apple.R", encoding = "UTF-8")
+source("functions/processing-questionnaires.R", encoding = "UTF-8")
+
+dir.create("temp", showWarnings = FALSE)
+
+## Paper questionnaires -----
+df_session1 <- load_paper_questionnaire_data("Session1")
+df_session2 <- load_paper_questionnaire_data("Session2")
+
+df_session1 <- mutate(df_session1, session = 1)
+df_session2 <- mutate(df_session2, session = 2)
+
+df_questionnaire <- bind_rows(df_session1, df_session2)
+df_questionnaire <- add_relax_scores(df_questionnaire)
+df_questionnaire <- add_poms_scores(df_questionnaire)
+
+df_questionnaire <- add_blood_pressure_scores(df_questionnaire)
+df_questionnaire$condition <- df_questionnaire$sessionType
+
+df_questionnaire <- code_weather(df_questionnaire)
+
+save(df_questionnaire, file = "temp/df_questionnaire.RData")
+
+## ssq ----
+df_ssq <- load_online_questionnaire_data("SSQ")
+df_ssq <- process_ssq(df_ssq)
+save(df_ssq, file = "temp/df_ssq.RData")
+
+## quality ----
+df_quality <- load_online_questionnaire_data("Quality")
+df_quality <- process_quality(df_quality)
+save(df_quality, file = "temp/df_quality.RData")
+
+## immersion ----
+df_immersion <- load_online_questionnaire_data("Immersion")
+df_immersion <- process_immersion(df_immersion)
+save(df_immersion, file = "temp/df_immersion.RData")
+
+## BFI ---
+# Needs explicitly state character
+df_bfi <- read_sheet("1Cp9mc7GGKKMGybn63QLDlZctYChlda-3rHSiVudxgl8",
+  sheet = "Qualtrics", col_types = "c", na = c("", "NA"))
+df_bfi <- df_bfi[-1, ]
+# remove second row with names of columns
+df_bfi <- readr::type_convert(df_bfi, na = c("", "NA"))
+df_bfi <- repsy.bfi::process_bfi(df_bfi, "Big5", "60")
+df_bfi <- mutate(df_bfi, gender = recode(sex, `1` = "male", `2` = "female"))
+#recode columnn gender in the tale df_bfi so that 2 is female and 1 is male
+df_bfi <- standardize_bfi(df_bfi, "CZ60z")
+df_bfi <- mutate(df_bfi, ID = toupper(ID))
+
+## Labels for fields -----
+field_labeller <- c("forestry.landscaping", "agriculture.horticulture",
+  "botany.plant.biology", "biology.other", "environmental.science", "none")
+## adds professions
+df_bfi <- df_bfi %>%
+  select("ID", starts_with("fieldProfession")) %>%
+  pivot_longer(-ID) %>%
+  separate(name, into = c("field", "category"), sep = "_") %>%
+  mutate(category = field_labeller[as.numeric(category)]) %>%
+  filter(!is.na(value)) %>%
+  group_by(ID) %>%
+  mutate(proffessions = paste0(category, collapse = ",")) %>%
+  ungroup() %>%
+  select(ID, proffessions) %>%
+  distinct() %>%
+  right_join(df_bfi, by = "ID") %>%
+  select(-starts_with("fieldProfession"))
+
+## Adds hobbies ----
+df_bfi <- df_bfi %>%
+  select("ID", starts_with("fieldHobby")) %>%
+  pivot_longer(-ID) %>%
+  separate(name, into = c("field", "category"), sep = "_") %>%
+  mutate(category = field_labeller[as.numeric(category)]) %>%
+  filter(!is.na(value)) %>%
+  group_by(ID) %>%
+  mutate(hobbies = paste0(category, collapse = ",")) %>%
+  ungroup() %>%
+  select(ID, hobbies) %>%
+  distinct() %>%
+  right_join(df_bfi, by = "ID") %>%
+  select(-starts_with("fieldHobby"))
+
+save(df_bfi, file = "temp/df_bfi.RData")
+
+## Airplane data ----
+df_airplanes <- load_airplane_data(file.path(LOCAL_DATA_PATH, "airplanes"))
+df_airplanes
+
+df_airplane_timestamps <-
+  load_online_questionnaire_data("merging-timestamps") %>%
+  filter(condition == "VR") %>%
+  mutate(timestamp_hour = ifelse(
+    is.na(airplane_hour_edit), timestamp_hour, airplane_hour_edit))
+
+df_airplanes_count <- df_airplanes %>%
+  group_by(date, hour) %>%
+  summarise(airplanes = n()) %>%
+  ungroup()
+
+df_airplanes_sounds <- df_airplanes %>%
+  left_join(select(df_airplane_timestamps, ID, condition,
+    timestamp_hour, timestamp_date),
+  by = c("hour" = "timestamp_hour", "date" = "timestamp_date")) %>%
+  filter(!is.na(ID))
+
+df_airplanes_count <- left_join(df_airplanes_count, df_airplane_timestamps,
+  by = c("hour" = "timestamp_hour", "date" = "timestamp_date")) %>%
+  select(ID, airplanes) %>%
+  filter(!is.na(ID)) %>%
+  mutate(condition = "VR")
+
+save(df_airplanes_count, df_airplanes_sounds, file = "temp/df_airplanes.RData")
+
+## Apple watch data ---
+watch_data <- load_health_data(file.path(LOCAL_DATA_PATH, "apple_health_export/export.xml"))
+df_health <- merge_health_workouts(watch_data$health, watch_data$workouts)
+
+df_health <- df_health %>%
+  filter(!is.na(workout_starttime)) %>%
+  mutate(workout_date = str_glue("{year(workout_starttime)}-{month(workout_starttime)}-{day(workout_starttime)}"),
+         workout_hour = str_glue("{hour(workout_starttime)}"))
+
+df_watch_timestamps <-
+  load_online_questionnaire_data("merging-timestamps", col_types = "c") %>%
+  mutate(timestamp_hour = ifelse(
+    is.na(watch_hour_edit), timestamp_hour, watch_hour_edit))
+
+df_health <- df_health %>%
+  left_join(select(df_watch_timestamps, ID, condition, timestamp_hour, timestamp_date),
+    by = c("workout_hour" = "timestamp_hour", "workout_date" = "timestamp_date")) %>%
+  filter(!is.na(ID))
+
+save(df_health, file = "temp/df_health.RData")
+rm(watch_data)
+## Merging ----
+df_forest <- df_questionnaire %>%
+  left_join(df_ssq, by = "ID") %>%
+  left_join(df_quality, by = "ID") %>%
+  left_join(df_immersion, by = "ID") %>%
+  left_join(df_bfi, by = "ID") %>%
+  rows_update(df_airplanes_count, by = c("ID", "condition"))
+
+save(df_forest, file = "temp/df_forest.RData")
+
+
+
+## Data checks
+
+```{r}
+
+```
+
+## Dropping participants
+
+FOVR 24 last questionnaire (completely last person) was lost.
+
+### Apple processing
+
+```{r apple watch processing}
+
+```
+
+FOVR 33 forest is missing (10.11.2023 15:00 - forgot to start?)
+FOVR 24
+First 5 participants are missing as well (forest Data - forgot the watch).
+

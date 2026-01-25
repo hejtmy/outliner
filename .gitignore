@@ -1,0 +1,26 @@
+# R
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+.Rcheck/
+*.Rproj
+
+# artifacts
+.gemini/
+
+# Node.js (Frontend)
+inst/app/node_modules/
+inst/app/dist/
+inst/app/.env
+inst/app/.DS_Store
+
+# System
+.DS_Store
+Thumbs.db
+
+# Temporary
+test_rmd_parsing.R
+example_tracking.R
+gen_tracked_data.R
+*.log

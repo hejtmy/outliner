@@ -1,0 +1,218 @@
+---
+title: "Data checks"
+author: "Lukáš Hejtmánek"
+format: 
+  html:
+    self-contained: true
+---
+
+## Data checks
+
+```{r}
+#| echo: false
+#| warning: false 
+library(tidyverse)
+library(here)
+library(papaja)
+library(correlation)
+library(gt)
+library(report)
+here::i_am("reports/data-checks.qmd")
+source(here("reports/elements/loading-preprocessing.R"))
+source(here("reports/elements/analytical-help.R"))
+load(here::here("temp/df_forest.RData"))
+load(here::here("temp/df_health.RData"))
+df_forest <- remove_unnecessary_columns(df_forest)
+```
+
+```{r processing }
+#| echo: false
+bad_participants <- get_participants_without_both_sessions(df_forest)
+df_forest <- filter(df_forest, !ID %in% bad_participants)
+
+df_measures_original <- format_important_measures(df_forest)
+df_measures <- scale_measures(df_measures_original) %>%
+  filter_measures()
+```
+
+```{r colnames}
+colnames(df_forest)
+```
+
+## Overall report
+
+```{r report}
+report::report_table(df_forest) %>%
+  select(-c(n_Obs, percentage_Missing, Skewness, Kurtosis, n_Entries)) %>%
+  filter(!is.na(Mean)) %>%
+  gt() %>%
+    fmt_number(columns = where(~ is.numeric(.x)), decimals = 3)
+```
+
+
+### Checking session number
+
+```{r effect of first_session}
+df_forest <- add_first_condition(df_forest)
+
+df_measures %>%
+  left_join(select(df_forest, ID, condition, first_condition), by = c("ID", "condition")) %>%
+  filter(condition != first_condition) %>%
+  group_by(what, when) %>%
+  group_modify(~report_table(t.test(.x$value ~ .x$first_condition)), .keep = FALSE) %>%
+  select(-c(Parameter, Group, Method, Alternative, CI), -contains("CI")) %>%
+  mutate(p = apa_p(p)) %>%
+  gt() %>%
+    tab_header(title = "Effect of first session") %>%
+    fmt_number(columns = where(~ is.numeric(.x)), decimals = 3)
+```
+
+
+```{r session number}
+df_measures %>%
+  left_join(select(df_forest, ID, condition, session), by = c("ID", "condition")) %>%
+  filter(when == "post") %>%
+  group_by(what, condition) %>%
+  group_modify(~report_table(t.test(.x$value ~ .x$session)), .keep = FALSE) %>%
+  select(-c(Parameter, Group, Method, Alternative, CI), -contains("CI")) %>%
+  mutate(p = apa_p(p)) %>%
+  gt() %>%
+    tab_header(title = "Effect of session number") %>%
+    fmt_number(columns = where(~ is.numeric(.x)), decimals = 3)
+```
+
+### Checking administrator
+
+```{r administrator effect descriptives}
+df_forest %>%
+  select(administrator, starts_with("relax"), starts_with("POMS"), starts_with("blood")) %>%
+  group_by(administrator) %>%
+  summarise_all(mean, na.rm = TRUE) %>%
+  pivot_longer(-administrator, names_to = "variable", values_to = "value") %>%
+  pivot_wider(names_from = "administrator", values_from = "value") %>%
+  gt() %>%
+    tab_header(title = "Effect of administrator") %>%
+    fmt_number(columns = where(~ is.numeric(.x)), decimals = 3)
+```
+
+```{r administrator effect statistics}
+df_measures %>%
+  select(-z_value) %>%
+  pivot_wider(names_from = "when", values_from = "value", id_cols = c(ID, condition, what, category)) %>%
+  mutate(diff = post - pre) %>%
+  pivot_longer(cols = c(pre, post, diff), names_to = "when", values_to = "value") %>%
+  left_join(select(df_forest, ID, condition, administrator), by = c("ID", "condition")) %>%
+  filter(administrator != "Martin/Oliver") %>%
+  group_by(what, when) %>%
+  group_modify(~broom::tidy(aov(.x$value ~ .x$administrator)), .keep = FALSE) %>%
+  ungroup() %>%
+  filter(term != "Residuals") %>%
+  gt() %>%
+    tab_header(title = "Effect of administrator") %>%
+    fmt_number(columns = where(~ is.numeric(.x)), decimals = 3)
+
+# ANOVA for vitality in post measurement by administrator
+df_measures %>%
+  filter(what == "vitality", when == "post") %>%
+  left_join(select(df_forest, ID, condition, administrator), by = c("ID", "condition")) %>%
+  filter(administrator != "Martin/Oliver") %>%
+  aov(value ~ administrator, data = .) %>%
+  summary()
+```
+
+```{r administrator effect plots}
+df_forest %>%
+  select(condition, administrator, contains("_diff")) %>%
+  pivot_longer(-c(administrator, condition), names_to = "variable", values_to = "value") %>%
+  ggplot(aes(x = variable, y=value, fill=administrator, color=administrator)) +
+    geom_boxplot() +
+    geom_point(position=position_dodge(width=0.75)) +
+    facet_grid(~condition) +
+    coord_flip() +
+    theme_minimal()
+```
+
+Testing if the fact that it is raining at the start of the experience has any effect on the outcome measures.
+
+### Effect of weather
+
+```{r rain effects}
+head(df_forest)
+create_post_table(df_measures, df_forest, "weather_rain")
+check_difference(filter(df_measures, condition == "les"), df_forest, "weather_rain")
+```
+
+Interestingly there are no significant effects of rain on either of the measures.
+
+```{r humidity effects}
+plot_relationship(filter(df_measures, condition=="les"), df_forest, "humidity_avg")
+check_correlations(filter(df_measures, condition=="les"), df_forest, "humidity_avg")
+```
+
+There seems to be no strong effect of humidity on the outcome measures.
+
+```{r temperature effects}
+plot_relationship(filter(df_measures, condition=="les"), df_forest, "temperature_avg")
+check_correlations(filter(df_measures, condition == "les"), df_forest, "temperature_avg")
+```
+
+And neither does temperature seem to have any effect on the outcome measures.
+
+### Heart rate in norm
+
+```{r blood pressure table}
+df_forest %>%
+  select(condition, matches("blood_.*_pre")) %>%
+  pivot_longer(-condition, names_to = "variable", values_to = "value") %>%
+  group_by(condition, variable) %>%
+  report_table()
+```
+
+```{r blood pressure norm plot}
+df_forest %>%
+  select(condition, matches("blood_.*_pre")) %>%
+  pivot_longer(-condition, names_to = "variable", values_to = "value") %>%
+  ggplot(aes(value)) +
+    geom_histogram() +
+    facet_grid(~variable)
+```
+
+### Correlation between blood measures and ROS and POMS
+```{r blood pressure correlation}
+df_forest %>%
+  select(condition, ends_with("_diff")) %>%
+  GGally::ggpairs(mapping = aes(color = condition))
+```
+
+## Effect of planes
+
+```{r planes}
+df_forest %>%
+  select(ID, condition, airplanes, ends_with("post")) %>%
+  pivot_longer(cols=-c(ID, condition, airplanes), names_to = "variable", values_to = "value") %>%
+  ggplot(aes(airplanes, value)) +
+    geom_point() +
+    geom_smooth(method="lm") +
+    facet_grid(rows=vars(variable), cols=vars(condition))
+```
+
+## Effect of sex
+
+There doesnt seem to be any effect of gender or interaction between gender and efficiency.
+
+```{r sex}
+df_forest %>%
+  select(ID, gender, condition, ends_with("diff")) %>%
+  pivot_longer(cols=-c(ID, gender, condition), names_to = "variable", values_to = "value") %>%
+  ggplot(aes(gender, value)) +
+    geom_boxplot() +
+    facet_grid(cols=vars(variable), rows=vars(condition), scales = "free_y")
+
+check_difference(df_measures, df_forest, "gender")
+
+filter(df_measures, condition == "les") %>%
+  check_difference(df_forest, "gender")
+
+filter(df_measures, condition == "VR") %>%
+  check_difference(df_forest, "gender")
+```

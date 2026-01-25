@@ -1,0 +1,127 @@
+---
+title: "Osobnostní profil `r params$code`"
+format: 
+  html:
+    theme: lux
+    embed-resources: true
+    self-contained: true
+params:
+  code: "NEO"
+  profile:
+    value:
+      extraversion:
+        percentile: 99
+      negativeemotionality:
+        percentile: 99
+      conscientiousness:
+        percentile: 99
+      openmindedness:
+        percentile: 99
+      agreeableness:
+        percentile: 99
+---
+
+```{r, echo = FALSE, message = FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo=FALSE, warning=FALSE, message = FALSE)
+```
+
+## Popis modelu
+Níže jsou presentovány vaše výsledky z osobnostního dotazníku. Dotazník se snaží postihnout lidskou osobnost pomocí pětifaktorového modelu osobnosti, pro který se vžilo označení Velká pětka (Big 5). Tyto dimenze osobnosti jsou extraverze, přívětivost, svědomitost, negativní emocionalita a otevřenost mysli. 
+
+Tento model je jeden z nejrozšířenějších a nejpoužívanějších jak ve výzkumu lidské osobnosti, tak i v profesní sféře. Nalézá své využíti mezi psychology, psychiatry či v rámci výběrových řízení.
+
+## Přehled výsledků
+Dotazník měl 60 otázek, z toho se ke každé dimenzi vztahuje právě 12. Na každou otázku jste odpovídali na škále 1-5. Níže jsou presentovány přepočítané výsledky formou tzv. percentilů. Ty označují, kolik procent lidí skóruje na dané škále níže, než jste zaskórovali vy. Například percentil 50 u extraverze znamená, že 50 procent lidí v populaci je méně extravertních, než jste vy (či se alespoň tak hodnotí).
+
+Percentily jsou odvozené ze vzorku 1733 osob ve věku 15-26 let (Hřebíčková, M., Jelínek, M., Květon, P., Benkovič, A., Botek, M., Sudzina, F., ... & John, O. P. (2020). BIG FIVE INVENTORY 2 (BFI-2): HIERARCHICKÝ MODEL S 15 SUBŠKÁLAMI. Ceskoslovenska Psychologie, 64(4).) a jsou počítány odlišně pro každé pohlaví.
+
+Zde můžete vidět schématické zobrazení jednotlivých percentilů pro dimenze **extraverze, přívětivosti, svědomitosti, negativní emocionality a otevřenost mysli**. Níže pak najdete detailní popis každé dimenze a vašeho výsledku zvlášť.
+
+```{r get the values}
+profile <- params$profile
+```
+
+:::{.bs-component}
+
+:::{.progress style="height: 25px;"}
+:::{class="progress-bar bg-warning" role="progressbar" style="width: `r profile$extraversion$percentile`%;" aria-valuenow="`r profile$extraversion$percentile`" aria-valuemin="0" aria-valuemax="100"}
+:::
+:::
+
+:::{.progress style="height: 25px;"}
+:::{class="progress-bar bg-success" role="progressbar" style="width: `r profile$agreeableness$percentile`%;" aria-valuenow="`r profile$agreeableness$percentile`" aria-valuemin="0" aria-valuemax="100"}
+:::
+:::
+
+:::{.progress style="height: 25px;"}
+:::{class="progress-bar bg-dark" role="progressbar" style="width: `r profile$conscientiousness$percentile`%;" aria-valuenow="`r profile$conscientiousness$percentile`" aria-valuemin="0" aria-valuemax="100"}
+:::
+:::
+
+:::{.progress style="height: 25px;"}
+:::{class="progress-bar bg-danger" role="progressbar" style="width: `r profile$negativeemotionality$percentile`%;" aria-valuenow="`r profile$negativeemotionality$percentile`" aria-valuemin="0" aria-valuemax="100"}
+:::
+:::
+
+:::{.progress style="height: 25px;"}
+:::{class="progress-bar bg-info" role="progressbar" style="width: `r profile$openmindedness$percentile`%;" aria-valuenow="`r profile$openmindedness$percentile`" aria-valuemin="0" aria-valuemax="100"}
+:::
+:::
+
+:::
+
+
+## Individuální škály
+
+### Extraverze
+:::{.progress}
+:::{class="progress-bar bg-warning" role="progressbar" style="width: `r profile$extraversion$percentile`%;" aria-valuenow="`r profile$extraversion$percentile`" aria-valuemin="0" aria-valuemax="100"}
+:::
+:::
+
+Percentil: `r profile$extraversion$percentile` %
+
+Extraverze se vyznačuje rozsahem aktivit, které jedinec rád vykonává ve společnosti. Osoby s vysokým percentilem rádi komunikují, a často jsou vnímáni jako plní energie. Bývají to nadšení, akční jedinci, projevují se jako sebejistí, aktivní, hovorní, veselí a optimističtí. Disponují vysokou skupinovou viditelností, rádi se prosazují. Extravertní lidé mohou ve společenském prostředí působit dominantněji. Introverti mají nižší sociální angažovanost a úroveň energie než extraverti. Mají tendenci působit tiše, nenápadně, rozvážně, nicméně jsou spíše zdrženliví než nepřátelští. Jejich nedostatečná aktivita není způsobena plachostí, sociální fobií nebo depresí, introverti jen potřebují méně podnětů a více času o samotě než extraverti. Často lidé na této škále skórují někde mezi oběma póly, neboť je jejich chování hodně odvislé od sociální situace.
+
+### Přívětivost
+
+:::{.progress}
+:::{class="progress-bar bg-success" role="progressbar" style="width: `r profile$agreeableness$percentile`%;" aria-valuenow="`r profile$agreeableness$percentile`" aria-valuemin="0" aria-valuemax="100"}
+:::
+:::
+
+Percentil: `r profile$agreeableness$percentile` %
+
+Rys příjemnosti odráží individuální rozdíly v obecném zájmu o sociální harmonii. Příjemní jedinci si cení toho, že vycházejí s ostatními. Jsou obecně ohleduplní, laskaví, mají pro druhé pochopeni a porozumění, bývají velkorysí, vstřícní a ochotní přistoupit na kompromisy ve svůj neprospěch pro dosažení souladu.  Jedinci s vysokým percentilem bývají též důvěřiví a jsou přesvědčení, ze ostatní budou pomáhat jim. Lidé s nízkým percentilem se popisuji jako nepřátelští a sebestřední, raději soutěží, než kooperují, upřednostňují vlastní zájmy před vycházením s ostatními. Obecně je u nich méně pravděpodobné, že se obětují pro druhé. Bývají též skeptičtí vůči motivům ostatních, což způsobuje, že jsou podezřívaví a nespolupracující.
+
+### Svědomitost
+
+:::{.progress}
+:::{class="progress-bar bg-dark" role="progressbar" style="width: `r profile$conscientiousness$percentile`%;" aria-valuenow="`r profile$conscientiousness$percentile`" aria-valuemin="0" aria-valuemax="100"}
+:::
+:::
+Percentil: `r profile$conscientiousness$percentile` %
+
+Svědomitost je tendence projevovat sebekázeň, dobrou kontrolu impulzů, cílevědomost a snahu usilovat o úspěch navzdory opatřením nebo cizím očekáváním. Vysoká svědomitost je často též vnímána jako tvrdohlavost. Nízká svědomitost je spojena s flexibilitou a spontánností, ale může se projevovat jako lajdáctví a nedostatek spolehlivosti. Vysoké skóre svědomitosti ukazuje na preferenci plánovaného chování před spontánním. Nižší skóre často značí osoby, které jsou méně strukturované a méně organizované. Mohou prokrastinovat, aby věci stihli, a někdy kvůli tomu promeškávají termíny.
+
+### Negativní emocionalita
+
+:::{.progress}
+:::{class="progress-bar bg-danger" role="progressbar" style="width: `r profile$negativeemotionality$percentile`%;" aria-valuenow="`r profile$negativeemotionality$percentile`" aria-valuemin="0" aria-valuemax="100"}
+:::
+:::
+
+Percentil: `r profile$negativeemotionality$percentile` %
+
+I přes přítomnost slova "negativní" je třeba tuto vlastnost nevnímat jako diagnostickou, ale pouze vyjadřující míru mezilidské odlišnosti. Dimenze negativní emocionality, někdy též nazývaná emoční labilita, popisuje způsob, jakým jedinec prožívá negativní emoce jako strach, hněv či smutek. Lidé s vysokým percentilem jsou emočně reaktivní a zranitelní vůči stresu, mohou trpět nejistotou, nervozitou a úzkostmi a prožívají negativní emoce silněji. Je u nich větší pravděpodobnost, že si běžné situace budou vykládat jako ohrožující. Mají také sklon k přelétavosti ve způsobu vyjadřování emocí. Jejich negativní emoční reakce mají tendenci přetrvávat neobvykle dlouhou dobu, což znamená, že mají často špatnou náladu. Emocionálně stabilní jedinci bývají klidní a vyrovnaní a snadněji se vyrovnávají s novými situacemi. Mohou však občas působit na své okolí příliš stroze, odtažitě či nepřirozeně.
+
+### Otevřenost mysli
+
+:::{.progress}
+:::{class="progress-bar bg-info" role="progressbar" style="width: `r profile$openmindedness$percentile`%;" aria-valuenow="`r profile$openmindedness$percentile`" aria-valuemin="0" aria-valuemax="100"}
+:::
+:::
+
+Percentil: `r profile$openmindedness$percentile` %
+
+Škála postihuje zájmy a míru zaujetí pro nové zkušenosti, prožitky, dobrodružství, neobvyklé myšlenky a vysokou představivost. Lidé s vysokým percentilem jsou intelektuálně zvídaví, otevření emocím, mají bohatou fantazii, vyšší vnímavost k prožitkům a lehce silnější prožívání pozitivních i negativních emocí. Tito jedinci často mají nekonvenční myšlenky a hodnoty, bývají intelektuální, dychtiví po znalostech, zajímající se o umění a dávají přednost novým produktům a změně před stabilitou. Vysoká otevřenost může být též vnímána jako nepředvídatelnost nebo nesoustředěnost a nese s sebou větší pravděpodobnost zapojení do rizikového chování. Osoby s nízkým percentilem mají sklon chovat se konvenčně a zastávat konzervativní postoje. Dávají přednost známému, osvědčenému před novým pozlátkem. Tito jedinci často usilují o sebenaplnění prostřednictvím vytrvalosti a jsou charakterizováni jako osoby pragmatické a orientované na data.

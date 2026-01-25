@@ -1,0 +1,1514 @@
+---
+title: "Comprehensive Analysis Report: CZU LaserForest Study"
+author: "Lukáš Hejtmánek"
+format:
+  html:
+    self-contained: true
+    page-layout: full
+    toc: true
+    toc-depth: 3
+    number-sections: true
+    code-fold: true
+    theme: cosmo
+execute:
+  echo: false
+  warning: false
+  message: false
+---
+
+# Overview
+
+```{r basic loading}
+#| echo: false
+library(tidyverse)
+library(report)
+library(gt)
+library(marginaleffects)
+library(here)
+library(papaja)
+library(lmerTest)
+library(correlation)
+library(tidyr)
+library(performance)
+library(gt)
+here::i_am("reports/basic-report.qmd")
+# This file is created in scripts/  prepare-dat.R
+load(here::here("temp/df_forest.RData"))
+
+source(here("reports/elements/colors-labels.R"))
+source(here("reports/elements/loading-preprocessing.R"))
+source(here("reports/elements/analytical-help.R"))
+
+df_forest <- remove_unnecessary_columns(df_forest)
+df_forest <- add_first_condition(df_forest)
+
+POSITIVE_SCALES = c("relax_ros", "POMS_vitality", "ros", "vitality")
+```
+
+```{r removing participants with no data from both sessions}
+bad_participants <- get_participants_without_both_sessions(df_forest)
+df_forest <- filter(df_forest, !(ID %in% bad_participants))
+```
+
+```{r ROS and POMS pre and post}
+df_measures_original <- format_important_measures(df_forest)
+df_measures <- scale_measures(df_measures_original) %>%
+  filter_measures()
+
+df_removed <- df_measures %>%
+  count(what) %>%
+  right_join(count(df_measures_original, what), 
+    by = "what", suffix = c("_filtered", "_original")) %>%
+  mutate(removed = n_original - n_filtered,
+          removed_percent = removed / n_original)
+```
+
+```{r removing outliers report}
+gt(df_removed) %>%
+  tab_header(
+    title = "Data Quality: Outlier Removal",
+    subtitle = "Values removed based on z-score filtering (|z| > 3)"
+  ) %>%
+  cols_label(
+    what = "Measure",
+    n_filtered = "N (After Filtering)",
+    n_original = "N (Original)",
+    removed = "N Removed",
+    removed_percent = "% Removed"
+  ) %>%
+  fmt_percent(columns = removed_percent, decimals = 1) %>%
+  tab_options(
+    table.font.size = px(14),
+    heading.title.font.size = px(16),
+    heading.subtitle.font.size = px(13)
+  )
+```
+
+## Data Filtering and Quality Control {#sec-filtering}
+
+Values larger than 3 standard deviations from the mean were removed from the analysis. This affected a total of `r sum(df_removed$removed)` values, which is `r sum(df_removed$removed_percent)/nrow(df_removed)`% of the original data.
+
+A total of `r length(bad_participants)` participants were removed from the analysis because one of their complete questionnaires were lost.
+
+## Sample Characteristics {#sec-participants}
+
+```{r participant report, results="asis"}
+participant_data <- filter(df_forest, sessionNumber == 1) %>%
+  select(Age = age, Sex = gender) %>%
+  mutate(Sex = recode(Sex, "female"="F", "male"="M"))
+print(report_participants(participant_data, spell_n = TRUE))
+```
+
+# Descriptive Statistics {#sec-descriptives}
+
+## Primary Outcome Measures {#sec-primary-measures}
+
+```{r Measures table}
+df_measures %>%
+  group_by(what, when, condition) %>%
+  summarise(
+    Mean = mean(value, na.rm = TRUE),
+    SD = sd(value, na.rm = TRUE),
+    Median = median(value, na.rm = TRUE),
+    Min = min(value, na.rm = TRUE),
+    Max = max(value, na.rm = TRUE),
+    n = n(),
+    .groups = "drop"
+  ) %>%
+  pivot_wider(names_from = condition, values_from = c(Mean, SD, Median, Min, Max, n)) %>%
+  mutate(what = relabel(what, measures_labeller)) %>%
+  group_by(what) %>%
+  gt() %>%
+    tab_header(
+      title = "Descriptive Statistics: Psychological and Physiological Measures",
+      subtitle = "Values presented by condition and measurement timing"
+    ) %>%
+    cols_label(
+      when = "Timing",
+      Mean_les = "Mean",
+      SD_les = "SD",
+      Median_les = "Median",
+      Min_les = "Min",
+      Max_les = "Max",
+      n_les = "N",
+      Mean_VR = "Mean",
+      SD_VR = "SD",
+      Median_VR = "Median",
+      Min_VR = "Min",
+      Max_VR = "Max",
+      n_VR = "N"
+    ) %>%
+    fmt_number(columns = where(~ is.numeric(.x)), decimals = 2) %>%
+    tab_spanner(label = "Real Forest", columns = ends_with("les")) %>%
+    tab_spanner(label = "Virtual Forest", columns = ends_with("VR")) %>%
+    opt_row_striping(row_striping = TRUE) %>%
+    tab_options(
+      table.font.size = px(13),
+      heading.title.font.size = px(16),
+      row_group.font.weight = "bold"
+    )
+```
+
+### Individual Change Visualization
+
+```{r measures plot, fig.height=20, fig.width=10}
+df_measures %>%
+  pivot_wider(names_from = when, values_from = value, id_cols = c(ID, what, condition, category)) %>%
+  mutate(better = ifelse(what %in% POSITIVE_SCALES, post > pre, pre > post)) %>%
+  pivot_longer(cols = c(pre, post), names_to = "when", values_to = "value") %>%
+  mutate(when = factor(when, levels = c("pre", "post")),
+         when = recode(when, "pre" = "Pre", "post" = "Post")) %>%
+  ggplot(aes(when, value)) +
+    geom_violin(fill = "gray90", alpha = 0.5) +
+    geom_boxplot(width = 0.2, outlier.shape = NA, fill = "white", alpha = 0.7) +
+    geom_point(aes(group = ID, color = better), size = 1.5, alpha = 0.6) +
+    geom_line(aes(group = ID, color = better), alpha = 0.3, linewidth = 0.8) +
+    facet_grid(
+      rows = vars(what),
+      cols = vars(condition),
+      labeller = labeller(
+        condition = condition_labeller,
+        what = measures_labeller
+      ),
+      scales = "free_y"
+    ) +
+    scale_color_manual(
+      values = c("TRUE" = "#2E7D32", "FALSE" = "#C62828"),
+      labels = c("TRUE" = "Improved", "FALSE" = "Worsened"),
+      name = "Change Direction"
+    ) +
+    labs(
+      title = "Pre-Post Changes in Outcome Measures by Condition",
+      subtitle = "Individual trajectories colored by improvement direction",
+      y = "Measure Value",
+      x = "Measurement Time"
+    ) +
+    papaja::theme_apa(base_size = 14) +
+    theme(
+      legend.position = "bottom",
+      strip.text = element_text(size = 11),
+      plot.title = element_text(size = 16, face = "bold"),
+      plot.subtitle = element_text(size = 12, color = "gray30")
+    )
+```
+
+### Summary Statistics by Condition and Time
+
+```{r Measures comparison table}
+df_comparison_table <- df_measures %>%
+  group_by(what, when, condition, category) %>%
+  summarise(
+    Mean = mean(value, na.rm = TRUE),
+    SD = sd(value, na.rm = TRUE),
+    MeanSD = paste0(round(Mean, 2), " (", round(SD, 2), ")"),
+    .groups = "drop"
+  ) %>%
+  select(-c(Mean, SD)) %>%
+  pivot_wider(names_from = c(when, condition), values_from = MeanSD)
+
+df_comparison_table %>%
+  mutate(what = relabel(what, measures_labeller)) %>%
+  group_by(category) %>%
+  gt() %>%
+    cols_label(
+      what = "Measure",
+      pre_les = "Pre",
+      post_les = "Post",
+      pre_VR = "Pre",
+      post_VR = "Post"
+    ) %>%
+    tab_spanner(label = "Real Forest", columns = ends_with("les")) %>%
+    tab_spanner(label = "Virtual Forest", columns = ends_with("VR")) %>%
+    tab_header(
+      title = "Means and Standard Deviations by Condition",
+      subtitle = "Values presented as M (SD)"
+    ) %>%
+    tab_options(
+      table.font.size = px(13),
+      heading.title.font.size = px(16),
+      row_group.font.weight = "bold"
+    ) %>%
+    cols_move_to_end(columns = ends_with("VR"))
+```
+
+## Data Distribution and Normality {#sec-normality}
+
+### Distribution Visualizations
+
+```{r differences histograms, fig.height=8, fig.width=12}
+df_forest %>%
+  select(ends_with("pre"), ends_with("post"), ends_with("diff")) %>%
+  pivot_longer(cols = everything()) %>%
+  separate_wider_delim(cols = "name", names = c("category", "measure", "when"), delim = "_") %>%
+  group_by(when, measure) %>%
+  filter(abs(scale(value)) < 3) %>%
+  ungroup() %>%
+  mutate(when = factor(when, levels = c("pre", "post", "diff"),
+                       labels = c("Pre", "Post", "Difference"))) %>%
+  ggplot(aes(value, fill = when)) +
+    geom_density(alpha = 0.2) +
+    geom_histogram(aes(y = after_stat(density)), bins = 20, alpha = 0.6, color = "white") +
+    facet_wrap(~measure, scales = "free", ncol = 3) +
+    scale_fill_brewer(palette = "Set2", name = "Measurement") +
+    labs(
+      title = "Distribution of Outcome Measures",
+      subtitle = "Density plots with histogram overlays (outliers removed)",
+      x = "Value",
+      y = "Density"
+    ) +
+    papaja::theme_apa(base_size = 12) +
+    theme(
+      legend.position = "bottom",
+      strip.text = element_text(face = "bold"),
+      plot.title = element_text(size = 14, face = "bold")
+    )
+```
+
+
+### Q-Q Plots for Normality Assessment
+
+```{r qq plots, fig.height=8, fig.width=12}
+df_forest %>%
+  select(ends_with("pre"), ends_with("post"), ends_with("diff")) %>%
+  pivot_longer(cols = everything()) %>%
+  separate_wider_delim(cols = "name", names = c("category", "measure", "when"), delim = "_") %>%
+  group_by(when, measure) %>%
+  filter(abs(scale(value)) < 3) %>%
+  ungroup() %>%
+  mutate(when = factor(when, levels = c("pre", "post", "diff"),
+                       labels = c("Pre", "Post", "Difference"))) %>%
+  ggplot(aes(sample = value, color = when)) +
+    geom_qq(alpha = 0.6, size = 1.5) +
+    stat_qq_line(linewidth = 0.8, linetype = "dashed") +
+    facet_wrap(~measure, scales = "free", ncol = 3) +
+    scale_color_brewer(palette = "Set2", name = "Measurement") +
+    labs(
+      title = "Q-Q Plots for Normality Assessment",
+      subtitle = "Points should follow diagonal line if normally distributed",
+      x = "Theoretical Quantiles",
+      y = "Sample Quantiles"
+    ) +
+    papaja::theme_apa(base_size = 12) +
+    theme(
+      legend.position = "bottom",
+      strip.text = element_text(face = "bold"),
+      plot.title = element_text(size = 14, face = "bold")
+    )
+```
+
+### Shapiro-Wilk Normality Tests
+
+```{r normality tests}
+df_forest %>%
+  select(ends_with("pre"), ends_with("post"), ends_with("diff")) %>%
+  pivot_longer(cols = everything()) %>%
+  separate_wider_delim(cols = "name", names = c("category", "measure", "when"), delim = "_") %>%
+  group_by(when, measure) %>%
+  filter(abs(scale(value)) < 3) %>%
+  group_modify(~broom::tidy(shapiro.test(.x$value)), .keep = TRUE) %>%
+  ungroup() %>%
+  mutate(
+    when = factor(when, levels = c("pre", "post", "diff"),
+                  labels = c("Pre", "Post", "Difference")),
+    significance = ifelse(p.value < 0.05, "Non-normal", "Normal"),
+    p.value = apa_p(p.value)
+  ) %>%
+  select(Measure = measure, Timing = when, Statistic = statistic, `p-value` = p.value, Assessment = significance) %>%
+  gt() %>%
+    tab_header(
+      title = "Shapiro-Wilk Normality Tests",
+      subtitle = "Testing assumption of normal distribution for each measure"
+    ) %>%
+    fmt_number(columns = Statistic, decimals = 3) %>%
+    tab_style(
+      style = cell_fill(color = "#FFE6E6"),
+      locations = cells_body(columns = Assessment, rows = Assessment == "Non-normal")
+    ) %>%
+    tab_options(
+      table.font.size = px(13),
+      heading.title.font.size = px(16)
+    )
+```
+
+### Interpretation of Normality
+
+Although almost all results for the normality tests (except physiological measures) suggest that the data do not follow a normal distribution, the Q-Q plots indicate that any deviations are not severe. Therefore, we opted to use parametric tests throughout the analysis to simplify the results section. However, caution should be exercised when interpreting scales of anger, confusion, and depression, which are heavily biased towards the lower end of their respective scales (floor effects).
+
+## Relationship Between Physiological and Psychological Measures {#sec-psych-phys-relationship}
+
+To investigate the relationship between psychological and physiological measures, we computed correlations between these measures from post-session assessments.
+
+We did not apply corrections for multiple comparisons as the goal was exploratory—to identify potential relationships that might inform the analysis strategy. Results showed that only the correlation between relaxation and systolic blood pressure was significant and small in magnitude. This suggests that physiological and psychological measures capture largely independent aspects of the forest experience and both should be included in analyses and future studies. Detailed correlation matrices are available in the supplementary materials.
+
+# Primary Analyses {#sec-primary-analysis}
+
+```{r analytical functions}
+compare_pre_post <- function(data, correction = "fdr") {
+  res <- data %>%
+    pivot_wider(names_from = when, values_from = value) %>%
+    group_by(condition, category, what) %>%
+    group_modify(~report_table(t.test(.x$post, .x$pre, paired = TRUE)), .keep=TRUE) %>%
+    ungroup() %>%
+    select(-c(Parameter, Group, Method, Alternative, CI, df_error), -starts_with("d_CI")) %>%
+    mutate(p = apa_p(p.adjust(p, method = correction)))
+  return(res)
+}
+
+compare_conditions <- function(data, correction = "fdr") {
+  res <- data %>%
+    pivot_wider(names_from = when, values_from = value) %>%
+    group_by(what) %>%
+    group_modify(~broom::tidy(lm(post ~ pre + condition, data =.)), .keep=TRUE) %>%
+    ungroup() %>%
+    filter(term == "conditionVR") %>%
+    select(-term) %>%
+    # run multiple corrections for multiple comparisons
+    mutate(p.value = apa_p(p.adjust(p.value, method = "fdr")))
+  
+  m <- data %>%
+    pivot_wider(names_from = when, values_from = value) %>%
+    group_by(what) %>%
+    group_map(~list(mod = lm(post ~ pre + condition, data =.), name=.$what[1]), .keep=TRUE) %>%
+    magrittr::set_names(map_chr(., ~.$name)) %>%
+    map(~.$mod)
+  return(list(table = res, models = m))
+}
+```
+
+## Linear Mixed-Effects Models {#sec-lmer-main}
+
+### Model Specification
+
+To investigate both the effect of the intervention and the effect of the medium while controlling for participant-level variability, we used linear mixed-effects models. We modeled each outcome measure as a function of:
+
+- **Fixed effects**: Condition (Real Forest vs. Virtual Forest), Time (Pre vs. Post), and their interaction
+- **Random effects**: Participant (to account for individual differences)
+
+This model allows us to determine:
+
+1. The overall efficacy of the intervention (main effect of Time)
+2. The overall effect of condition (main effect of Condition)
+3. Whether intervention efficacy differs between conditions (Condition × Time interaction)
+
+### Model Results
+
+```{r lmer model figuring out the imporatnce of the medium}
+lmer_table <- df_measures %>%
+  group_by(what) %>%
+  group_modify(~report_table(lmer(value ~ when*condition + (1|ID), data = .)), .keep = TRUE) %>%
+  ungroup()
+
+lmer_models <- df_measures %>%
+  group_by(what) %>%
+  group_map(~list(mod = lmer(value ~ when*condition + (1|ID), data = .), name = .$what[1]), .keep = TRUE) %>%
+  magrittr::set_names(map_chr(., ~.$name)) %>%
+  map(~.$mod)
+
+lmer_table %>%
+  filter(Effects == "fixed") %>%
+  select(what, Parameter, Coefficient, starts_with("CI"), t, p) %>%
+  mutate(
+    what = relabel(what, measures_labeller),
+    p_sig = case_when(
+      p < 0.001 ~ "***",
+      p < 0.01 ~ "**",
+      p < 0.05 ~ "*",
+      TRUE ~ ""
+    ),
+    p = apa_p(p)
+  ) %>%
+  group_by(what) %>%
+  gt() %>%
+    tab_header(
+      title = "Linear Mixed-Effects Model Results",
+      subtitle = "Fixed effects for psychological and physiological measures"
+    ) %>%
+    cols_label(
+      Parameter = "Predictor",
+      Coefficient = "β",
+      CI_low = "CI Lower",
+      CI_high = "CI Upper",
+      t = "t-value",
+      p = "p-value",
+      p_sig = "Sig."
+    ) %>%
+    fmt_number(columns = c(Coefficient, CI_low, CI_high, t), decimals = 3) %>%
+    tab_footnote(
+      footnote = "*** p < .001, ** p < .01, * p < .05",
+      locations = cells_column_labels(columns = p_sig)
+    ) %>%
+    tab_options(
+      table.font.size = px(12),
+      heading.title.font.size = px(16),
+      row_group.font.weight = "bold"
+    )
+```
+
+### Key Findings
+
+**Main Effects of Time (Intervention Efficacy):**
+
+Forest bathing appears to be an effective intervention for:
+
+- **Reducing**: Confusion, depression, fatigue, heart rate, and tension
+- **Increasing**: Relaxation/restoration outcome scores
+- **No significant effects**: Vitality, anger, blood pressure (systolic and diastolic)
+
+**Condition Effects and Interactions:**
+
+A significant Condition × Time interaction was observed for diastolic blood pressure, with participants in the VR condition showing greater benefit compared to the real forest condition. Additionally, there appeared to be overall lower systolic blood pressure and lower pulse in the VR condition, though these effects require further investigation.
+
+## Marginal Effects Analysis {#sec-marginal-effects}
+
+### Rationale
+
+While the mixed-effects models provide important insights, marginal effects offer a more intuitive interpretation of the intervention effects. The marginal effects approach accounts for baseline (pre-session) differences and estimates the average change within each condition, providing clearer effect size estimates for practical interpretation. 
+
+```{r marginal effects for the ROS, eval = FALSE}
+knitr::kable(tidy(avg_slopes(lmer_models$ros, by="condition", variables="when")))
+tidy(avg_comparisons(lmer_models$ros))
+tidy(avg_comparisons(lmer_models$ros, variables = "condition", by="when"))
+```
+
+### Marginal Effects Estimates
+
+```{r marginal effects table}
+ls_marginal_slopes <- map(lmer_models, ~tidy(avg_slopes(., by = "condition", variables = "when")))
+df_marginal_slopes <- bind_rows(ls_marginal_slopes, .id = "what")
+df_marginal_slopes_summary <- df_marginal_slopes %>%
+  select(-c(term, contrast), -starts_with("conf"), -starts_with("predicted"))
+
+df_comparison_table %>%
+  pivot_longer(-c(what, category), names_pattern = ("(.*)_(.*)"), names_to = c("when", "condition")) %>%
+  pivot_wider(names_from = when, values_from = value) %>%
+  left_join(df_marginal_slopes_summary, by = c("what", "condition")) %>%
+  mutate(
+    what = relabel(what, measures_labeller),
+    condition = recode(condition, "les" = "Real Forest", "VR" = "Virtual Forest"),
+    p.value.adj = p.adjust(p.value, "fdr"),
+    p_sig = case_when(
+      p.value.adj < 0.001 ~ "***",
+      p.value.adj < 0.01 ~ "**",
+      p.value.adj < 0.05 ~ "*",
+      TRUE ~ ""
+    ),
+    p.value.adj = apa_p(p.value.adj)
+  ) %>%
+  select(category, what, condition, pre, post,
+         Change = estimate, SE = std.error, `p-value` = p.value.adj, Sig. = p_sig) %>%
+  group_by(category) %>%
+  gt() %>%
+    tab_header(
+      title = "Estimated Changes by Condition",
+      subtitle = "Marginal effects from mixed-effects models with FDR correction"
+    ) %>%
+    cols_label(
+      what = "Measure",
+      condition = "Condition",
+      pre = "Pre M(SD)",
+      post = "Post M(SD)",
+      Change = "Est. Change",
+      SE = "SE"
+    ) %>%
+    tab_footnote(
+      footnote = "p-values corrected for multiple comparisons using FDR method",
+      locations = cells_column_labels(columns = `p-value`)
+    ) %>%
+    tab_footnote(
+      footnote = "Estimated change from marginal mean slopes (marginaleffects::avg_slopes)",
+      locations = cells_column_labels(columns = Change)
+    ) %>%
+    tab_footnote(
+      footnote = "*** p < .001, ** p < .01, * p < .05",
+      locations = cells_column_labels(columns = Sig.)
+    ) %>%
+    fmt_number(columns = c(Change, SE), decimals = 3) %>%
+    tab_options(
+      table.font.size = px(12),
+      heading.title.font.size = px(16),
+      row_group.font.weight = "bold"
+    )
+```
+
+# Comparability of VR and Real Forest {#sec-vr-forest-comparison}
+
+## Correlation Between Intervention Effects {#sec-correlation-effects}
+
+A central question of this study was whether the VR experience can serve as a valid proxy for real forest experiences. We investigated the relationship between intervention efficacy in the VR and real forest conditions.
+
+### Rationale
+
+The mixed-effects models partially address this question: if VR perfectly predicted real forest outcomes, the Condition × Time interaction would be zero, and post-scores would be fully predicted by pre-scores regardless of condition. To examine this more directly, we computed difference scores (post - pre) as a measure of intervention efficacy and correlated these differences between conditions. 
+
+### Visualization: Change Score Correlations
+
+```{r correlation between efficiency of real and VR forest plot, fig.height=10, fig.width=12}
+df_measures %>%
+  select(-value) %>%
+  pivot_wider(names_from = when, values_from = z_value) %>%
+  mutate(diff = post - pre) %>%
+  select(-c(pre, post)) %>%
+  pivot_wider(names_from = condition, values_from = diff) %>%
+  mutate(what = relabel(what, measures_labeller)) %>%
+  ggplot(aes(les, VR)) +
+    geom_vline(xintercept = 0, linetype = "dashed", color = "gray50", alpha = 0.7) +
+    geom_hline(yintercept = 0, linetype = "dashed", color = "gray50", alpha = 0.7) +
+    geom_point(alpha = 0.5, size = 2.5, color = "#2C3E50") +
+    geom_smooth(method = "lm", se = TRUE, color = "#E74C3C", fill = "#E74C3C", alpha = 0.2) +
+    facet_wrap(~what, scales = "free", ncol = 3) +
+    labs(
+      title = "Correlation of Change Scores: Real Forest vs. Virtual Forest",
+      subtitle = "Standardized difference scores (Post - Pre)",
+      x = "Real Forest Change (z-score)",
+      y = "Virtual Forest Change (z-score)"
+    ) +
+    papaja::theme_apa(base_size = 12) +
+    theme(
+      strip.text = element_text(face = "bold", size = 10),
+      plot.title = element_text(size = 14, face = "bold"),
+      plot.subtitle = element_text(size = 11, color = "gray30")
+    )
+```
+
+### Visualization: Post-Score Correlations
+
+```{r correlation between post scores of real and VR forest plot, fig.height=10, fig.width=12}
+df_measures %>%
+  filter(when == "post") %>%
+  select(-value) %>%
+  pivot_wider(names_from = condition, values_from = z_value) %>%
+  mutate(what = relabel(what, measures_labeller)) %>%
+  ggplot(aes(les, VR)) +
+    geom_point(alpha = 0.5, size = 2.5, color = "#2C3E50") +
+    geom_smooth(method = "lm", se = TRUE, color = "#3498DB", fill = "#3498DB", alpha = 0.2) +
+    facet_wrap(~what, scales = "free", ncol = 3) +
+    labs(
+      title = "Correlation of Post-Session Scores: Real Forest vs. Virtual Forest",
+      subtitle = "Standardized post-intervention scores",
+      x = "Real Forest Post-Score (z-score)",
+      y = "Virtual Forest Post-Score (z-score)"
+    ) +
+    papaja::theme_apa(base_size = 12) +
+    theme(
+      strip.text = element_text(face = "bold", size = 10),
+      plot.title = element_text(size = 14, face = "bold"),
+      plot.subtitle = element_text(size = 11, color = "gray30")
+    )
+```
+
+```{r, eval = FALSE}
+df_measures %>%
+  filter(when == "post", what == "sys") %>%
+  select(-z_value) %>%
+  pivot_wider(names_from = condition, values_from = value) %>%
+  group_by(what) %>%
+  group_modify(~report_table(cor.test(.x$VR, .x$les)), .keep=TRUE) %>%
+  ungroup() %>%
+  select(-c(Parameter1, Parameter2, Method, Alternative, df_error,t), -matches("CI")) %>%
+  mutate(p = apa_p(p.adjust(p, method = "fdr")))
+```
+
+### Correlation Results
+
+```{r correlation between efficiency of real and VR forest table}
+calculate_condition_cor <- function(data, suffix = "") {
+  cor_tab <- data %>%
+    pivot_longer(cols = -c(ID, condition), names_to = "measure", values_to = "value") %>%
+    group_by(measure) %>%
+    filter(abs(scale(value)) < 3) %>%
+    ungroup() %>%
+    pivot_wider(names_from = condition, values_from = value, id_cols = c(ID, measure)) %>%
+    group_by(measure) %>%
+    group_modify(~report_table(cor.test(.x$VR, .x$les)), .keep = TRUE) %>%
+    ungroup() %>%
+    select(-c(Parameter1, Parameter2, Method, Alternative, df_error, t), -matches("CI")) %>%
+    mutate(p = apa_p(p.adjust(p, method = "fdr"))) %>%
+    mutate(measure = str_remove(measure, suffix)) %>%
+    rename_with(~paste0(., suffix), c(r, p))
+}
+
+df_condition_diff_cor <- calculate_condition_cor(select(df_forest, ID, condition, ends_with("_diff")), "_diff")
+df_condition_post_cor <- calculate_condition_cor(select(df_forest, ID, condition, ends_with("_post")), "_post")
+df_condition_pre_cor <- calculate_condition_cor(select(df_forest, ID, condition, ends_with("_pre")), "_pre")
+
+df_condition_diff_cor %>%
+  left_join(df_condition_post_cor, by = "measure") %>%
+  left_join(df_condition_pre_cor, by = "measure") %>%
+  mutate(measure = relabel(measure, measures_forest_labeller)) %>%
+  gt() %>%
+    tab_header(
+      title = "Correlations Between VR and Real Forest Conditions",
+      subtitle = "Pearson correlations with FDR correction for multiple comparisons"
+    ) %>%
+    cols_label(
+      measure = "Measure",
+      r_diff = "r",
+      p_diff = "p",
+      r_post = "r",
+      p_post = "p",
+      r_pre = "r",
+      p_pre = "p"
+    ) %>%
+    tab_spanner(label = "Change Scores (Δ)", columns = c(r_diff, p_diff)) %>%
+    tab_spanner(label = "Post-Scores", columns = c(r_post, p_post)) %>%
+    tab_spanner(label = "Pre-Scores", columns = c(r_pre, p_pre)) %>%
+    tab_footnote(
+      footnote = "Correlation of difference scores (Post - Pre) between conditions",
+      locations = cells_column_spanners(spanners = "Change Scores (Δ)")
+    ) %>%
+    tab_footnote(
+      footnote = "Correlation of post-intervention scores between conditions",
+      locations = cells_column_spanners(spanners = "Post-Scores")
+    ) %>%
+    tab_footnote(
+      footnote = "Correlation of pre-intervention scores between conditions",
+      locations = cells_column_spanners(spanners = "Pre-Scores")
+    ) %>%
+    fmt_number(columns = starts_with("r_"), decimals = 3) %>%
+    tab_options(
+      table.font.size = px(12),
+      heading.title.font.size = px(16)
+    )
+```
+
+### Summary of Correlation Findings
+
+While correlations between pre-session and post-session measures were medium to large and statistically significant for most measures (with the exception of POMS anger), the correlations between VR and real forest **change scores** (difference between post and pre) were small and non-significant across all measures.
+
+This finding suggests that while individuals may show similar absolute levels of psychological and physiological measures in both conditions, the **magnitude of change** produced by each intervention is not strongly correlated. In other words, individuals who benefit greatly from real forest exposure do not necessarily show similarly large benefits from VR forest exposure, and vice versa. Alternative explanations for this pattern are discussed in later sections.
+
+# Binary Outcome Analysis {#sec-binary-analysis}
+
+## Rationale for Binary Approach
+
+Our pilot study revealed substantial individual variability in intervention responses, a finding reinforced by the weak correlations between condition-specific change scores. To address the question "Does the intervention help?" in a simpler, more interpretable way, we recoded outcomes as binary: **Did the intervention help or not?**
+
+For each measure, we classified change as beneficial if:
+
+- **Positive scales** (ROS, Vitality): Post-score ≥ Pre-score
+- **Negative scales** (All other measures): Post-score ≤ Pre-score
+
+This binary classification approach is robust to outliers, so **all data points** (including those previously excluded for exceeding 3 SD) were included in these analyses.
+
+```{r binary comparison calculation}
+df_binary_comparisons <- df_forest %>%
+  select(ID, condition, ends_with("_diff")) %>%
+  pivot_longer(cols=-c(ID, condition), names_to="what", values_to="value") %>%
+  pivot_wider(names_from = condition, values_from = value, id_cols = c(ID, what)) %>%
+  mutate(what = str_remove(what, "_diff")) %>%
+  mutate(les_improvement_score = ifelse(what %in% POSITIVE_SCALES, les, -les),
+         VR_improvement_score = ifelse(what %in% POSITIVE_SCALES, VR, -VR),
+         modalities_diff = les_improvement_score - VR_improvement_score,
+         better_modality = 
+          case_when(modalities_diff == 0 ~ "Equal",
+                    modalities_diff > 0 ~ "Forest",
+                    modalities_diff < 0 ~ "VR"),
+        les_change = case_when(les_improvement_score == 0 ~ "equal",
+                               les_improvement_score > 0 ~ "improved",
+                               les_improvement_score < 0 ~ "worsened"),
+        VR_change = case_when(VR_improvement_score == 0 ~ "equal",
+                               VR_improvement_score > 0 ~ "improved",
+                               VR_improvement_score < 0 ~ "worsened"))
+
+df_binary_comparisons_counts <- df_binary_comparisons %>%
+  group_by(what) %>%
+  count(better_modality) %>%
+  pivot_wider(names_from = better_modality, values_from = n) %>%
+  ungroup() %>%
+  rename(Missing = `NA`) %>%
+  replace_na(list(Forest = 0, VR = 0, Equal = 0, Missing = 0))
+```
+
+```{r improvements or not}
+df_binary_comparisons %>%
+  filter(!is.na(modalities_diff)) %>%
+  select(ID, what, ends_with("change")) %>%
+  # recode TRUE to improved and FALSE to worsened
+  count(what, les_change, VR_change) %>%
+  group_by(what) %>%
+  mutate(out = str_glue("{n} ({round(n/sum(n), 4)*100}%)")) %>%
+  select(-n) %>%
+  ungroup() %>%
+  pivot_wider(names_from = ends_with("change"), values_from = out, values_fill = "0 (0%)")
+```
+
+
+## Summary of Improvement Patterns
+
+```{r improvements or not summative}
+df_binary_comparisons %>%
+  filter(!is.na(modalities_diff)) %>%
+  select(ID, what, ends_with("change")) %>%
+  pivot_longer(cols = ends_with("change"), names_to = "modality", values_to = "change") %>%
+  mutate(modality = str_remove(modality, "_change")) %>%
+  group_by(what, modality) %>%
+  mutate(n_total = n()) %>%
+  ungroup() %>%
+  group_by(what, modality, change) %>%
+  mutate(n = n()) %>%
+  select(-ID) %>%
+  distinct() %>%
+  pivot_wider(names_from = change, values_from = n, values_fill = 0) %>%
+  mutate(
+    out = str_glue("{improved}/{equal}/{worsened} ({round(improved/n_total * 100, 1)}%/{round(equal/n_total * 100, 1)}%/{round(worsened/n_total * 100, 1)}%)"),
+    n_total = NULL, improved = NULL, equal = NULL, worsened = NULL
+  ) %>%
+  pivot_wider(names_from = modality, values_from = out) %>%
+  mutate(what = relabel(what, measures_forest_labeller)) %>%
+  ungroup() %>%
+  gt() %>%
+    tab_header(
+      title = "Improvement Patterns by Condition",
+      subtitle = "Format: Improved/Equal/Worsened (% Improved/% Equal/% Worsened)"
+    ) %>%
+    cols_label(
+      what = "Measure",
+      les = "Real Forest",
+      VR = "Virtual Forest"
+    ) %>%
+    tab_options(
+      table.font.size = px(13),
+      heading.title.font.size = px(16)
+    )
+```
+
+## Between-Condition Comparisons
+
+Next, we examined which condition produced better outcomes for each participant on each measure. Since tied changes (equal improvement in both conditions) are easier to achieve for some measures than others (e.g., zero-inflated scales like POMS Anger vs. continuous measures like diastolic pressure), we allocated tied cases equally: **half to VR, half to Real Forest**.
+
+We then calculated the percentage of participants for whom each condition was superior. This includes rare cases where both conditions worsened the outcome—in those cases, the condition with the smaller deterioration was counted as "better."
+
+```{r binary comparison table}
+df_bindary_comparison_counts_equalized <- df_binary_comparisons_counts %>%
+  select(what, Equal, Forest, VR) %>%
+  rowwise() %>%
+  mutate(Forest = Forest + Equal/2, VR = VR + Equal/2,
+         total = Forest + VR) %>%
+  ungroup()
+
+df_binary_comparisons_counts %>%
+  mutate(across(is.numeric, ~(./38))) %>%
+  gt() %>%
+    tab_header(title = "Number of participants for whom the real forest or VR was better for each measure",
+      subtitle = "Calculated as the improvement being better in one") %>%
+    fmt_percent(columns = where(~ is.numeric(.x)))
+
+df_bindary_comparison_counts_equalized %>%
+  mutate(VR = str_glue("{VR} ({round(VR/total, 4)*100}%)"),
+        Forest = str_glue("{Forest} ({round(Forest/total, 4)*100}%)")) %>%
+  select(-c(total, Equal)) %>%
+  gt() %>%
+    tab_header(title = "Number of participants for whom the real forest or VR was better for each measure",
+    subtitle = "If the change in the measure was equal for VR and the real forest, we added half to the VR and half to the real forest")
+```
+
+```{r binary comparison chi square table}
+df_bindary_comparison_counts_equalized %>%
+  left_join(df_bindary_comparison_counts_equalized %>%
+    group_by(what) %>%
+    # calculate chi square test on each group between Forest and VR columns
+    group_modify(~broom::tidy(chisq.test(.x[,c("Forest", "VR")], correct = FALSE)), .keep=TRUE) %>%
+    ungroup() %>%
+    select(what, statistic, p.value) %>%
+    mutate(p.value = apa_p(p.value))) %>%
+    mutate(VR = str_glue("{VR} ({round(VR/total, 4)*100}%)"),
+        Forest = str_glue("{Forest} ({round(Forest/total, 4)*100}%)")) %>%
+  select(-c(total, Equal)) %>%
+  gt() %>%
+    tab_header(title = "Number of participants for whom the real forest or VR was better for each measure",
+    subtitle = "If the change in the measure was equal for VR and the real forest, we added half to the VR and half to the real forest") %>%
+  fmt_number(columns = where(~ is.numeric(.x)), decimals = 3) %>%
+  # add footnote to the statistic column
+  tab_footnote(footnote = "Chi square test between the Forest and VR columns", 
+                locations = cells_column_labels(columns = statistic))
+```
+
+In the table XY we can see simple binary comparisons of which measure ended up better (this includes situations where both modalities resulted in worse scores).
+
+### Visualization: Condition Superiority
+
+```{r, fig.height=8, fig.width=10}
+df_bindary_comparison_counts_equalized %>%
+  select(-c(total, Equal)) %>%
+  pivot_longer(cols = -what) %>%
+  filter(name != "NA") %>%
+  mutate(what = relabel(what, measures_forest_labeller)) %>%
+  ggplot(aes(x = what, y = value, fill = name)) +
+  geom_bar(na.rm = TRUE, stat = "identity", position = "fill") +
+  geom_text(
+    aes(label = round(value, 1)),
+    size = 5,
+    color = "white",
+    fontface = "bold",
+    position = position_fill(vjust = 0.5)
+  ) +
+  coord_flip() +
+  scale_fill_manual(
+    values = c("Forest" = "#04724D", "VR" = "#540C97"),
+    labels = c("Forest" = "Real Forest", "VR" = "Virtual Forest"),
+    name = "Better Condition"
+  ) +
+  scale_x_discrete(
+    limits = rev(df_bindary_comparison_counts_equalized %>%
+      arrange(desc(Forest)) %>%
+      mutate(what = relabel(what, measures_forest_labeller)) %>%
+      pull(what))
+  ) +
+  scale_y_continuous(labels = scales::percent) +
+  labs(
+    title = "Proportion of Participants for Whom Each Condition Was Superior",
+    subtitle = "Measures ordered by Real Forest superiority (tied cases split equally)",
+    x = "",
+    y = "Proportion of Participants"
+  ) +
+  papaja::theme_apa(base_size = 13) +
+  theme(
+    legend.position = "bottom",
+    plot.title = element_text(size = 14, face = "bold"),
+    plot.subtitle = element_text(size = 11, color = "gray30"),
+    axis.text.y = element_text(size = 11)
+  )
+```
+
+### Distribution of Condition Differences
+
+```{r, fig.height=10, fig.width=12}
+df_binary_comparisons %>%
+  mutate(what = relabel(what, measures_forest_labeller)) %>%
+  ggplot(aes(modalities_diff, fill = better_modality)) +
+  geom_vline(xintercept = 0, color = "black", linetype = "dashed", linewidth = 0.8) +
+  geom_histogram(bins = 15, color = "white", alpha = 0.8) +
+  facet_wrap(~what, scales = "free", ncol = 3) +
+  scale_fill_manual(
+    values = c("Forest" = "#04724D", "VR" = "#540C97", "Equal" = "#FFC300"),
+    labels = c("Forest" = "Real Forest Better", "VR" = "VR Better", "Equal" = "Equal"),
+    name = "Superior Condition",
+    na.value = "gray70"
+  ) +
+  labs(
+    title = "Distribution of Condition Differences",
+    subtitle = "Positive values = Real Forest better; Negative values = VR better",
+    x = "Difference in Improvement (Real Forest - VR)",
+    y = "Count"
+  ) +
+  papaja::theme_apa(base_size = 12) +
+  theme(
+    legend.position = "bottom",
+    strip.text = element_text(face = "bold", size = 10),
+    plot.title = element_text(size = 14, face = "bold"),
+    plot.subtitle = element_text(size = 11, color = "gray30")
+  )
+```
+
+## Within-Subject Concordance {#sec-concordance}
+
+Finally, we examined how changes in one condition related to changes in the other condition within the same individual. We classified each participant's response pattern as:
+
+- **Concordant**: Both conditions produced the same direction of change (both improved, both worsened, or both unchanged)
+- **Discordant**: Conditions produced different directions of change (one improved while the other worsened or stayed the same)
+
+We used chi-square tests to assess whether concordance rates differed significantly from chance expectations for each measure.
+
+```{r binary within subject}
+df_concordant <- df_binary_comparisons %>%
+  mutate(
+    les_VR_concordant = les_change == VR_change,
+    les_VR_concordant_state = les_change
+  ) %>%
+  filter(!is.na(les_VR_concordant)) %>%
+  count(what, les_VR_concordant) %>%
+  pivot_wider(names_from = les_VR_concordant, values_from = n, names_prefix = "concordant_")
+
+df_concordant %>%
+  group_by(what) %>%
+  group_modify(~broom::tidy(chisq.test(.x[, c("concordant_TRUE", "concordant_FALSE")], correct = FALSE)), .keep = TRUE) %>%
+  ungroup() %>%
+  select(what, statistic, p.value) %>%
+  mutate(p.value.adj = p.adjust(p.value, "fdr")) %>%
+  right_join(df_concordant, by = "what") %>%
+  relocate(starts_with("concordant"), .before = statistic) %>%
+  mutate(
+    what = relabel(what, measures_forest_labeller),
+    total = concordant_TRUE + concordant_FALSE,
+    concordant_n = concordant_TRUE,
+    discordant_n = concordant_FALSE,
+    concordant_pct = round(concordant_TRUE / total * 100, 1),
+    p.value.adj = apa_p(p.value.adj),
+    p_sig = case_when(
+      p.value < 0.001 ~ "***",
+      p.value < 0.01 ~ "**",
+      p.value < 0.05 ~ "*",
+      TRUE ~ ""
+    )
+  ) %>%
+  select(what, concordant_n, discordant_n, concordant_pct, statistic, p.value.adj, p_sig) %>%
+  gt() %>%
+    tab_header(
+      title = "Within-Subject Concordance Between Conditions",
+      subtitle = "Chi-square tests with FDR correction"
+    ) %>%
+    cols_label(
+      what = "Measure",
+      concordant_n = "Concordant",
+      discordant_n = "Discordant",
+      concordant_pct = "% Concordant",
+      statistic = "χ²",
+      p.value.adj = "p-value",
+      p_sig = "Sig."
+    ) %>%
+    fmt_number(columns = statistic, decimals = 3) %>%
+    fmt_number(columns = concordant_pct, decimals = 1) %>%
+    tab_footnote(
+      footnote = "*** p < .001, ** p < .01, * p < .05",
+      locations = cells_column_labels(columns = p_sig)
+    ) %>%
+    tab_footnote(
+      footnote = "Chi-square test comparing concordant vs. discordant response patterns",
+      locations = cells_column_labels(columns = statistic)
+    ) %>%
+    tab_footnote(
+      footnote = "p-values corrected for multiple comparisons using FDR",
+      locations = cells_column_labels(columns = p.value.adj)
+    ) %>%
+    tab_options(
+      table.font.size = px(13),
+      heading.title.font.size = px(16)
+    )
+```
+```{r kendall tau, eval = TRUE} 
+df_binary_comparisons %>%
+  group_by(what) %>%
+  group_modify(~broom::tidy(cor.test(.x$les, .x$VR, method="kendall")), .keep=TRUE)
+```
+
+# Exploratory Analyses: Potential Confounds {#sec-confounds}
+
+## Gender Effects {#sec-gender}
+
+We investigated potential gender effects on intervention outcomes by adding a Gender × Condition interaction term to the mixed-effects models. This analysis revealed no significant main effects of gender or Gender × Condition interactions.
+
+```{r}
+lmer_table_gender <- df_measures %>%
+  left_join(distinct(select(df_forest, ID, gender)), by = "ID") %>%
+  group_by(what) %>%
+  group_modify(~report_table(lmer(value ~ when + gender*condition + (1|ID), data = .)), .keep = TRUE) %>%
+  ungroup()
+
+lmer_table_gender %>%
+  filter(Effects == "fixed") %>%
+  select(what, Parameter, Coefficient, starts_with("CI"), t, p) %>%
+  mutate(
+    what = relabel(what, measures_labeller),
+    p_formatted = apa_p(p),
+    p_sig = case_when(
+      p < 0.001 ~ "***",
+      p < 0.01 ~ "**",
+      p < 0.05 ~ "*",
+      TRUE ~ ""
+    )
+  ) %>%
+  group_by(what) %>%
+  gt() %>%
+    tab_header(
+      title = "Gender Effects in Mixed-Effects Models",
+      subtitle = "Model: value ~ when + gender × condition + (1|ID)"
+    ) %>%
+    cols_label(
+      Parameter = "Predictor",
+      Coefficient = "β",
+      CI_low = "CI Lower",
+      CI_high = "CI Upper",
+      t = "t-value",
+      p_formatted = "p-value",
+      p_sig = "Sig."
+    ) %>%
+    fmt_number(columns = c(Coefficient, CI_low, CI_high, t), decimals = 3) %>%
+    cols_hide(columns = p) %>%
+    tab_options(
+      table.font.size = px(12),
+      heading.title.font.size = px(16),
+      row_group.font.weight = "bold"
+    )
+```
+
+We also explored potential gender differences in intervention benefits using t-tests comparing pre- and post-intervention scores. Since the goal was to rule out gender effects (rather than test specific hypotheses), we did not apply corrections for multiple comparisons. 
+
+```{r gender diff comparisons}
+check_difference(df_measures, df_forest, "gender")
+
+filter(df_measures, condition == "les") %>%
+  check_difference(df_forest, "gender")
+
+filter(df_measures, condition == "VR") %>%
+  check_difference(df_forest, "gender")
+```
+
+**Conclusion:** No significant gender differences were found in intervention-induced changes for either condition.
+
+## Baseline Differences Between Conditions {#sec-baseline}
+
+In previous research, we observed that participants in different conditions sometimes had different starting positions. For example, if VR participants began with higher relaxation, ceiling effects might limit observable benefits. We used independent samples t-tests to check for pre-session differences between conditions. No corrections for multiple comparisons were applied, as this was an exploratory check rather than a hypothesis test.
+
+```{r before session differences plot, fig.height=10, fig.width=12}
+df_measures %>%
+  filter(when == "pre") %>%
+  mutate(what = relabel(what, measures_labeller)) %>%
+  ggplot(aes(value, fill = condition)) +
+    geom_histogram(bins = 15, alpha = 0.7, position = "identity", color = "white") +
+    facet_wrap(~what, scales = "free", ncol = 3) +
+    scale_fill_manual(
+      values = c("les" = "#04724D", "VR" = "#540C97"),
+      labels = c("les" = "Real Forest", "VR" = "Virtual Forest"),
+      name = "Condition"
+    ) +
+    labs(
+      title = "Distribution of Pre-Session Scores by Condition",
+      subtitle = "Comparing baseline values before intervention",
+      x = "Pre-Session Value",
+      y = "Count"
+    ) +
+    papaja::theme_apa(base_size = 12) +
+    theme(
+      legend.position = "bottom",
+      strip.text = element_text(face = "bold", size = 10),
+      plot.title = element_text(size = 14, face = "bold"),
+      plot.subtitle = element_text(size = 11, color = "gray30")
+    )
+```
+
+Although some variables do not follow a normal distribution (namely anger, depression, and confusion, which are zero-inflated), we used parametric tests for consistency and clarity of results.
+
+```{r before session differences}
+df_measures %>%
+  filter(when == "pre") %>%
+  group_by(what) %>%
+  group_modify(~broom::tidy(t.test(value ~ condition, data = .x)), .keep = TRUE) %>%
+  ungroup() %>%
+  mutate(
+    what = relabel(what, measures_labeller),
+    p.value = apa_p(p.value),
+    p_sig = case_when(
+      as.numeric(str_remove(p.value, "[<>]")) < 0.05 ~ "*",
+      TRUE ~ ""
+    )
+  ) %>%
+  select(Measure = what, `Mean 1` = estimate1, `Mean 2` = estimate2,
+         Statistic = statistic, df = parameter, `p-value` = p.value, Sig. = p_sig) %>%
+  gt() %>%
+    tab_header(
+      title = "Baseline Comparisons: VR vs. Real Forest",
+      subtitle = "Independent samples t-tests on pre-intervention scores (uncorrected)"
+    ) %>%
+    fmt_number(columns = c(`Mean 1`, `Mean 2`, Statistic, df), decimals = 2) %>%
+    tab_options(
+      table.font.size = px(13),
+      heading.title.font.size = px(16)
+    )
+```
+
+**Conclusion:** Unlike in our previous study, we found no significant baseline differences between conditions, suggesting that randomization was effective and ceiling/floor effects are unlikely confounds.
+
+## Aircraft Noise {#sec-airplanes}
+
+We explored whether the number of aircraft passing overhead during the real forest session affected outcomes. Since aircraft noise would not affect pre-session measures, we modeled post-session scores as a function of aircraft count and its interaction with condition.
+
+```{r airplanes}
+df_forest %>%
+  select(ID, condition, airplanes) %>%
+  left_join(df_measures, by = c("ID", "condition")) %>%
+  filter(when == "post") %>%
+  group_by(what) %>%
+  group_modify(~broom::tidy(lm(value ~ airplanes*condition, data = .x)), .keep = TRUE) %>%
+  filter(term == "airplanes" | term == "airplanes:conditionVR") %>%
+  mutate(
+    what = relabel(what, measures_labeller),
+    p.value = apa_p(p.value)
+  ) %>%
+  select(Measure = what, Term = term, Estimate = estimate, SE = std.error,
+         Statistic = statistic, `p-value` = p.value) %>%
+  ungroup() %>%
+  gt() %>%
+    tab_header(
+      title = "Aircraft Noise Effects on Post-Session Outcomes",
+      subtitle = "Linear regression: post-score ~ aircraft count × condition"
+    ) %>%
+    fmt_number(columns = c(Estimate, SE, Statistic), decimals = 3) %>%
+    tab_options(
+      table.font.size = px(13),
+      heading.title.font.size = px(16)
+    )
+```
+
+**Conclusion:** No significant effects of aircraft count or Aircraft × Condition interactions were found, suggesting that ambient aircraft noise did not meaningfully influence outcomes. 
+
+## Simulator sickness
+
+In our previous study we have explored the effect of the simulator sickness on the results and found that the simulator sickness was related to the change in the restoration outcome. We have therefore explored the relationship between the simulator sickness on our final measures.
+
+```{r}
+cor_ssq_ocu_dis <- cor.test(df_forest$ssq_kim_oculomotor, df_forest$ssq_kim_disorientation, use = "complete.obs")
+report_statistics(cor_ssq_ocu_dis)
+```
+
+WE used Kim recommended scales of Oculomotor and Disorientation to measure simulator sickness. Unfortunately, these scales are still quite correlated (`r report_statistics(cor_ssq_ocu_dis)`) and so the interpretation of the results should be cautious.
+
+```{r ssq measures}
+df_ssq_measures <- df_measures %>%
+  filter(condition == "VR") %>%
+  left_join(select(df_forest, ID, condition,
+    ssq_disorientation = ssq_kim_disorientation, 
+    ssq_oculomotor = ssq_kim_oculomotor), by = c("ID", "condition")) %>%
+  select(-c(category, z_value, condition)) %>%
+  pivot_longer(-c(ID, what, when, value), names_to = "ssq_scale", values_to = "ssq_value")
+```
+
+```{r ssq plot}
+df_ssq_measures %>%
+  filter(when == "post", ssq_scale != "ssq_nausea") %>%
+  ggplot(aes(ssq_value, value)) +
+    geom_jitter() +
+    facet_grid(rows=vars(what), cols = vars(ssq_scale), scales="free") +
+    geom_smooth(method="lm") +
+    labs(title = "Relationship between the simulator sickness and the post session values",
+      subtitle = "Only VR condition. Artificial jitter added")
+```
+
+We have modelled the post value in the measures as a function of both disorientation and oculomotor scores. 
+
+```{r ssq analyses}
+ssq_measure_models <- df_ssq_measures %>%
+  filter(when == "post") %>%
+  pivot_wider(names_from = ssq_scale, values_from = ssq_value, id_cols = c(ID, what, when, value)) %>%
+  group_by(what) %>%
+  group_map(~list(mod = lm(value ~  ssq_disorientation + ssq_oculomotor, data =.), name=.$what[1]), .keep=TRUE) %>%
+  magrittr::set_names(map_chr(., ~.$name)) %>%
+  map(~.$mod)
+
+df_analysis_ssq_measure <- df_ssq_measures %>%
+  pivot_wider(names_from = ssq_scale, values_from = ssq_value) %>%
+  filter(when == "post") %>%
+  group_by(what) %>%
+  group_modify(~broom::tidy(lm(value ~ ssq_disorientation + ssq_oculomotor, data = .x)), .keep=TRUE) %>%
+  ungroup()
+
+df_analysis_ssq_measure %>%
+  filter(grepl("ssq", term)) %>%
+  mutate(p.value = apa_p(p.adjust(p.value, method = "fdr"))) %>%
+  group_by(what) %>%
+  gt() %>%
+    tab_header(title = "Coefficients of a Linear model of the effect of the simulator sickness on the post session values",
+      subtitle = "Corrected for multiple comparisons using FDR") %>%
+    fmt_number(columns = where(~ is.numeric(.x)), decimals = 3)
+```
+
+We have found that the oculomotor score significantly predicts the post values in the POMS fatigue (`r apa_print(ssq_measure_models$fatigue)$full_result$ssq_oculomotor`), vitality (`r apa_print(ssq_measure_models$vitality)$full_result$ssq_oculomotor`) and the restoration outcome scores as well (`r apa_print(ssq_measure_models$ros)$full_result$ssq_oculomotor`).
+
+## Personality
+
+We have administered big 5 questionnaire to see if some personality aspects affect the outcome measures
+
+```{r personality }
+df_measures_personality <- df_measures %>%
+  left_join(distinct(select(df_forest, ID, condition, openmindedness, negativeemotionality)), by=c("ID", "condition")) %>%
+  pivot_longer(cols = c(openmindedness, negativeemotionality), names_to="big5_scale", values_to="big5_value")
+
+report_personality_results <- function(data, trait) {
+  res <- data %>%
+    filter(when == "post", big5_scale == trait) %>%
+    group_by(what) %>%
+    group_modify(~report_table(cor.test(.$value, .$big5_value, data =., method = "spearman")), .keep=TRUE) %>%
+    ungroup() %>%
+    select(-c(Parameter1, Parameter2, Method, Alternative))
+  return(res)
+}
+```
+
+```{r personality plot}
+df_measures %>%
+  left_join(distinct(select(df_forest, ID, condition, openmindedness, negativeemotionality)), by=c("ID", "condition")) %>%
+  pivot_longer(cols = c(openmindedness, negativeemotionality), names_to="big5_scale",     values_to="big5_value") %>%
+  filter(when == "post") %>%
+  ggplot(aes(big5_value, value, color=condition)) +
+    geom_point() +
+    geom_smooth(method="lm") +
+    facet_grid(rows=vars(what), cols = vars(big5_scale), scales="free")
+```
+
+```{r personality linear models}
+df_measures_personality %>%
+  filter(big5_scale %in% c("negativeemotionality", "openmindedness"), when == "post") %>%
+  group_by(what, big5_scale) %>%
+  group_modify(~broom::tidy(lm(value ~ big5_value * condition , data =.)), .keep=TRUE) %>%
+  ungroup() %>%
+  group_by(big5_scale) %>%
+  mutate(p.value = apa_p(p.value)) %>%
+  gt() %>%
+    tab_header(title = "Coefficients of a Linear model of the effect of the personality on the final outcome measures",
+      subtitle = "Not corrected for multiple comparisons") %>%
+    fmt_number(columns = where(~ is.numeric(.x)), decimals = 3)
+```
+
+```{r big 5 report}
+report_personality_results(df_measures_personality, "negativeemotionality") %>%
+  mutate(p = apa_p(p)) %>%
+  gt() %>%
+    tab_header(title = "Correlation between the negative emotionality and the post session values",
+      subtitle = "Corrected for multiple comparisons using FDR") %>%
+    fmt_number(columns = where(~ is.numeric(.x)), decimals = 3)
+
+df_measures_personality %>%
+  filter(condition == "VR") %>%
+  report_personality_results("openmindedness") %>%
+  mutate(p = apa_p(p.adjust(p, method="fdr"))) %>%
+  gt() %>%
+    tab_header(title = "Correlation between the openmindedness and the post session values",
+      subtitle = "Corrected for multiple comparisons using FDR") %>%
+    fmt_number(columns = where(~ is.numeric(.x)), decimals = 3)
+```
+
+## Effect of order
+
+### First vs second session
+
+We have investigated the effect of the order of the sessions on the final scores. It is possible that participants might have started or had a slightly different reaction to the second session.
+
+```{r session order}
+df_measures %>%
+  left_join(distinct(select(df_forest, ID, condition, sessionNumber)), by=c("ID", "condition")) %>%
+  ggplot(aes(factor(sessionNumber), value, fill=sessionNumber)) +
+    geom_boxplot() +
+    facet_grid(cols = vars(what), rows = vars(when), scales = "free") 
+```
+
+```{r session order model}
+df_measures %>%
+  left_join(distinct(select(df_forest, ID, condition, sessionNumber)), by=c("ID", "condition")) %>%
+  group_by(what) %>%
+  group_modify(~report_table(lmer(value ~ when + condition*sessionNumber + (1|ID), data = .))) %>%
+  filter(!is.na(Parameter), !is.na(p)) %>%
+  ungroup() %>%
+  mutate(p = apa_p(p)) %>%
+  arrange(p) %>%
+  gt() %>%
+    tab_header(title = "Coefficients of a Linear model of the effect of the order on the post session values",
+      subtitle = "Corrected for multiple comparisons using FDR") %>%
+    fmt_number(columns = where(~ is.numeric(.x)), decimals = 3)
+```
+
+### Effect of first condition
+
+```{r}
+df_forest %>%
+  distinct(ID, first_condition) %>%
+  count(first_condition)
+```
+
+```{r}
+df_measures %>%
+  left_join(distinct(select(df_forest, ID, condition, first_condition)), by=c("ID", "condition")) %>%
+  ggplot(aes(first_condition, value, fill=first_condition)) +
+    geom_boxplot() +
+    facet_wrap(~what, scales = "free") 
+```
+
+```{r}
+df_measures %>%
+  left_join(distinct(select(df_forest, ID, condition, first_condition)), by=c("ID", "condition")) %>%
+  group_by(what) %>%
+  group_modify(~broom::tidy(lm(value ~ when*first_condition, data =.)), .keep=TRUE) %>%
+  ungroup() %>%
+  mutate(p.value = apa_p(p.value)) %>%
+  filter(term %in% c("whenpost:first_conditionVR", "first_conditionVR")) %>%
+  gt() %>%
+    tab_header(title = "Coefficients of a Linear model of the effect of the order on the post session values",
+      subtitle = "Corrected for multiple comparisons using FDR") %>%
+    fmt_number(columns = where(~ is.numeric(.x)), decimals = 3)
+```
+
+## Authenticity
+
+The reported authenticity was scores were on a scale from 1 to 5, with 1 being not at all authentic and 5 being very authentic.
+
+Users reported overall authenticity, visual and auditory authenticity. Summary cna be found in the table below.
+```{r authenticity preparation}
+df_authenticity_post <- df_measures %>%
+  left_join(select(df_forest, ID, condition, session, starts_with("authenticity") ), by=c("ID", "condition")) %>%
+  filter(condition == "VR", when == "post") %>%
+  select(-c(when, condition))
+```
+
+
+```{r authenticity session}
+df_authenticity_post %>%
+  select(-c(what, value, category, z_value)) %>%
+  distinct() %>%
+  pivot_longer(cols = starts_with("authenticity"), names_to="authenticity", values_to="authenticity_value") %>%
+  ggplot(aes(factor(session), authenticity_value)) +
+    geom_violin() +
+    geom_jitter(width = 0.1) +
+    facet_wrap(~authenticity, scales = "free")
+```
+
+```{r authenticity session model}
+df_authenticity_post %>%
+  select(-c(what, value, category, z_value)) %>%
+  distinct() %>%
+  pivot_longer(cols = starts_with("authenticity"), 
+               names_to = "authenticity", values_to = "authenticity_value") %>%
+  group_by(authenticity) %>%
+  # do a t test on session comparison
+  group_modify(~broom::tidy(t.test(.$authenticity_value ~ .$session, data =.)), .keep=TRUE)
+```
+
+```{r authenticity plot}
+df_measures %>%
+  left_join(select(df_forest, ID, condition, session, starts_with("authenticity") ), by=c("ID", "condition")) %>%
+  filter(condition == "VR", when == "post") %>%
+  pivot_longer(cols = starts_with("authenticity"), names_to="authenticity", values_to="authenticity_value") %>%
+  filter(!is.na(authenticity_value)) %>%
+  ggplot(aes(authenticity_value, value, group = authenticity_value)) +
+    geom_violin() +
+    geom_boxplot(width = 0.2) +
+    scale_x_discrete() +
+    geom_jitter(width = 0.1) +
+    facet_grid(rows=vars(what), cols = vars(authenticity), scales="free") +
+    labs(title = "Relationship between the authenticity and the post session values",
+      subtitle = "Only VR condition. Artificial jitter added")
+```
+
+```{r authenticity lm}
+df_measures %>%
+  left_join(select(df_forest, ID, condition, session, starts_with("authenticity")), by=c("ID", "condition")) %>%
+  filter(condition == "VR", when == "post") %>%
+  pivot_longer(cols = starts_with("authenticity"), names_to="authenticity", values_to="authenticity_value") %>%
+  filter(!is.na(authenticity_value)) %>%
+  group_by(what, authenticity) %>%
+  group_modify(~broom::tidy(lm(value ~ authenticity_value, data = .x)), .keep=TRUE) %>%
+  ungroup() %>%
+  group_by(what) %>%
+  filter(term == "authenticity_value") %>%
+  gt() %>%
+    tab_header(title = "Linear regression of the effect of the authenticity on the post session values",
+      subtitle = "Only VR condition") %>%
+    fmt_number(columns = where(~ is.numeric(.x)), decimals = 3)
+```
+
+## Similarity
+
+forestFeelOverall	forestFeelVisual	forestFeelAudio	missSmell	missOdor	missTaste
+
+After the second session participants were asked to compare the real forest and the virtual forest. As some people had the real forest as a first session and some as a second session, some people had to compare the real forest from memory, while others had to compare the virtual forest from memory. Each measure therefore suffers from some form of memory bias. 
+
+```{r comparability session plot}
+df_measures %>%
+  left_join(select(df_forest, ID, condition, session, first_condition, 
+    starts_with("forestFeel")), by=c("ID", "condition")) %>%
+  filter(when == "post", session == 2) %>%
+  group_by(ID) %>%
+  # select first row
+  slice(1) %>%
+  pivot_longer(cols = starts_with("forestFeel"), names_to="forestFeel", values_to="forestFeel_value") %>%
+  ggplot(aes(first_condition, forestFeel_value)) +
+    geom_violin() +
+    geom_jitter(width = 0.1) +
+    facet_wrap(~forestFeel, scales = "free")
+```
+
+```{r comparability session comparison ttest}
+df_forest %>%
+  filter(session == 2) %>%
+  select(ID, first_condition, starts_with("forestFeel")) %>%
+  left_join(df_measures, by=c("ID")) %>%
+  filter(when == "post", condition == "VR") %>%
+  group_by(ID) %>%
+  # select first row
+  slice(1) %>%
+  ungroup() %>%
+  pivot_longer(cols = starts_with("forestFeel"), names_to="forestFeel", values_to="forestFeel_value") %>%
+  group_by(forestFeel) %>%
+  group_modify(~broom::tidy(t.test(.$forestFeel_value ~ .$first_condition, data =.)), .keep=TRUE)
+```
+
+There was no significant differennce between people comparing the real forest from memory and people comparing the virtual forest from memory. 
+
+```{r comparability session comparison regression}
+df_forest %>%
+  filter(session == 2) %>%
+  select(ID, first_condition, starts_with("forestFeel")) %>%
+  left_join(df_measures, by=c("ID")) %>%
+  filter(when == "post", condition == "VR") %>%
+  pivot_longer(cols = starts_with("forestFeel"), names_to="forestFeel", values_to="forestFeel_value") %>%
+  group_by(forestFeel, what) %>%
+  filter(!is.na(forestFeel_value)) %>%
+  group_modify(~broom::tidy(lm(value ~ forestFeel_value, data = .x)), .keep=TRUE) %>%
+  ungroup() %>%
+  group_by(what) %>%
+  filter(term == "forestFeel_value") %>%
+  mutate(p.value = apa_p(p.value)) %>%
+  gt() %>%
+    tab_header(title = "Linear regression of the effect of the comparability on the post session values",
+      subtitle = "Only VR condition") %>%
+    fmt_number(columns = where(~ is.numeric(.x)), decimals = 3)
+
+```
+
+While participants often reported missing many real forest features in the open ended questions, the overall reported authenticity did not majorly affect any of the major measures and none of the comparability measures lead to significant increases in the outcome measures, with the exception of POMS anger. Similarly to the other analyses, 
+
+## Immersion
+
+participants evaluated their immersion using the edited SUS immersion questionnaire 
+
+Prosím zhodnoťte svůj pocit pobytu v lese na stupnici od 1 do 7, kde 7 představuje vaši běžnou zkušenost s pobytem v lese.
+
+Jak často jste měli pocit, že pro vás pobyt v lese byl skutečný?
+
+Když zavzpomínáte na svou zkušenost, považujete les spíše za sérií obrazů/vizualizací, který jste viděli, nebo spíše jako místo, kde jste byli?	
+
+Během zážitku jste měli spíše pocit, že jste v lese, nebo někde jinde?	
+
+Zapřemýšlejte nad  podobou své vzpomínky na pobyt v lese. Jak je tato vzpomínka podobná vzpomínkám na jiná místa, kde jste dnes byli? Za „podobu vzpomínky “ považujte věci, jako je její vizuální podrobnost, zda je barevná, do jaké míry se jeví jako živá nebo realistická, jak je rozsáhlá, jak zapadá do vaší představivosti, jak je panoramatická, a další podobné vlastnosti.	
+
+Jak často jste během zážitku mysleli, že jste doopravdy v lese?
+
+```{r immersion descriptives}
+df_measures_presence <- df_measures %>%
+  left_join(select(df_forest, ID, condition, starts_with("experience"), 
+    experience_total = immersion_total), by=c("ID", "condition")) %>%
+  filter(condition == "VR", when == "post")
+
+df_measures_presence %>%
+  select(-c(ID, condition, what, when, value, category, z_value)) %>%
+  distinct() %>%
+  report_table()
+```
+
+Participants reported overall low levels of immersion, with the below average score of 3.6 on a scale 1-7. Modelling the final score as a function of the immersion score did not reveal any significant effects on either of the main measures
+
+```{r immersion plot}
+df_measures_presence %>%
+  pivot_longer(cols = starts_with("experience"), names_to="experience", values_to="experience_value") %>%
+  filter(!is.na(experience_value)) %>%
+  ggplot(aes(experience_value, value)) +
+    geom_smooth(color = "green") +
+    geom_smooth(method="lm") +
+    geom_jitter(width = 0.1) +
+    facet_grid(rows=vars(what), cols = vars(experience), scales="free") +
+    labs(title = "Relationship between the immersion and the post session values",
+      subtitle = "Only VR condition. Artificial jitter added")
+```
+
+```{r immersion linear model}
+df_measures_presence %>%
+  pivot_longer(cols = starts_with("experience"), names_to="experience", values_to="experience_value") %>%
+  filter(!is.na(experience_value)) %>%
+  group_by(what, experience) %>%
+  group_modify(~broom::tidy(lm(value ~ experience_value, data = .x)), .keep=TRUE)  %>%
+  ungroup() %>%
+  group_by(what) %>%
+  mutate(p.value = apa_p(p.value)) %>%
+  filter(grepl("experience", term)) %>%
+  gt() %>%
+    tab_header(title = "Linear regression of the effect of the immersion on the post session values",
+      subtitle = "Only VR condition") %>%
+    fmt_number(columns = where(~ is.numeric(.x)), decimals = 3)
+```

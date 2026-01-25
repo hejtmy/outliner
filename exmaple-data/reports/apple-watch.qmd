@@ -1,0 +1,97 @@
+---
+title: "Apple watch report"
+author: "Lukáš Hejtmánek"
+format: 
+  html:
+    self-contained: true
+    page-layout: full
+execute:
+  echo: false
+  warning: false
+  message: false
+---
+```{r}
+#| echo: false
+library(tidyverse)
+library(report)
+library(gt)
+library(marginaleffects)
+library(here)
+library(papaja)
+library(correlation)
+library(lubridate)
+library(tidyr)
+library(performance)
+
+here::i_am("reports/basic-report.qmd")
+load(here::here("temp/df_forest.RData"))
+load(here::here("temp/df_health.RData"))
+```
+
+```{r}
+df_hr <- df_health %>%
+  filter(type == "HKQuantityTypeIdentifierHeartRate") %>%
+  mutate(value = as.numeric(value))
+```
+
+```{r evolution of the pulse}
+df_hr %>%  
+  ggplot(aes(time_since_start, value, color = condition)) +
+    geom_line() +
+    geom_smooth(method="lm", se=FALSE) +
+    facet_wrap(~ID) +
+    geom_point(data = df_forest, aes(x = 0, y=blood_pulse_pre, color = condition), size = 3) +
+    geom_point(data = df_forest, aes(x = 1500, y=blood_pulse_post, color = condition), size = 3)
+```
+
+## Comparing the post blood pulse and average for the last minute
+
+```{r}
+df_hr_lastminute <- df_hr %>%
+  group_by(ID, condition) %>%
+  mutate(last_mintue = tail(startDate, 1) - dminutes(1)) %>%
+  filter(startDate > last_mintue) %>%
+  summarise(mean_hr = mean(value))
+
+df_hr_lastminute <- df_hr_lastminute %>%
+  left_join(select(df_forest, ID, condition, blood_pulse_post), by=c("ID", "condition"))
+```
+
+
+## Comparing the post blood pulse and average for the last minute
+
+Checking if the apple watch and the dedicated blood pressure sensor give the same results.
+
+```{r apple watch vs blood pressure sensor}
+df_watch_omron <- df_health %>%
+  filter(type == "HKQuantityTypeIdentifierHeartRate") %>%
+  group_by(ID, condition) %>%
+  slice_tail(n = 10) %>%
+  mutate(value = as.numeric(value)) %>%
+  summarise(watch = median(value)) %>%
+  left_join(select(df_forest, ID, condition, administrator, omron = blood_pulse_post), by = c("ID", 
+  "condition")) %>%
+  pivot_longer(-c(ID, condition, administrator), names_to = "device", values_to = "value")
+
+ggplot(df_watch_omron, aes(device, value, group = ID)) +
+  geom_point() +
+  geom_line(aes(color = administrator)) +
+  facet_wrap(~condition)
+```
+
+## Modelling trends in the data
+
+```{r}
+lm_hr_time <- df_hr %>%
+  group_by(ID, condition) %>%
+  group_modify(~broom::tidy(lm(value ~ time_since_start, data =.)), .keep=TRUE) %>%
+  ungroup()
+
+lm_hr_time %>%
+  filter(term == "time_since_start") %>%
+  ggplot(aes(estimate, fill = condition)) +
+    geom_histogram() +
+    facet_wrap(~condition) +
+    geom_vline(xintercept =  0) + 
+    labs(title = "Histogram of calculated regression slopes for ", y = "Estimate")
+```
