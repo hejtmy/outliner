@@ -1,289 +1,431 @@
-import React, { useCallback, useEffect, useState, useMemo } from 'react';
-import { ReactFlow, Background, Controls, MiniMap, useNodesState, useEdgesState, addEdge, Panel, MarkerType } from '@xyflow/react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { Background, Controls, MiniMap, MarkerType, ReactFlow, useEdgesState, useNodesState } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import dagre from 'dagre';
 import CustomNode from './CustomNode';
+import './App.css';
 
 const nodeTypes = {
-  function: CustomNode,
-  object: CustomNode,
+  step: CustomNode,
+  artifact: CustomNode,
 };
 
-// Simple color palette for distinct flows
-const COLORS = [
-  '#007bff', // Blue
-  '#28a745', // Green
-  '#dc3545', // Red
-  '#ffc107', // Yellow
-  '#17a2b8', // Cyan
-  '#6610f2', // Purple
-  '#fd7e14', // Orange
-  '#e83e8c', // Pink
-];
+const PALETTE = ['#0f766e', '#9a3412', '#7c3aed', '#2563eb', '#b45309', '#be123c'];
 
-const getLayoutedElements = (nodes, edges, direction = 'TB') => {
-  const dagreGraph = new dagre.graphlib.Graph();
-  dagreGraph.setDefaultEdgeLabel(() => ({}));
+const normalizeGraph = (payload) => ({
+  nodes: Array.isArray(payload?.nodes) ? payload.nodes : [],
+  edges: Array.isArray(payload?.edges) ? payload.edges : [],
+  meta: {
+    title: payload?.meta?.title || 'Outliner',
+    root_file: payload?.meta?.root_file || '',
+    tracked_objects: Array.isArray(payload?.meta?.tracked_objects) ? payload.meta.tracked_objects : [],
+    documents: Array.isArray(payload?.meta?.documents)
+      ? payload.meta.documents
+      : Object.values(payload?.meta?.documents || {}),
+  },
+});
 
-  dagreGraph.setGraph({ rankdir: direction, nodesep: 50, ranksep: 80 });
+const getLayoutedElements = (nodes, edges) => {
+  const graph = new dagre.graphlib.Graph();
+  graph.setDefaultEdgeLabel(() => ({}));
+  graph.setGraph({ rankdir: 'LR', nodesep: 28, ranksep: 90, marginx: 24, marginy: 24 });
 
   nodes.forEach((node) => {
-    // Objects might be smaller, functions wider
-    const w = node.type === 'function' ? 180 : 120;
-    const h = 60;
-    dagreGraph.setNode(node.id, { width: w, height: h });
+    graph.setNode(node.id, {
+      width: node.type === 'step' ? 264 : 176,
+      height: node.type === 'step' ? 118 : 62,
+    });
   });
 
   edges.forEach((edge) => {
-    dagreGraph.setEdge(edge.source, edge.target);
+    graph.setEdge(edge.source, edge.target);
   });
 
-  dagre.layout(dagreGraph);
+  dagre.layout(graph);
 
-  const newNodes = nodes.map((node) => {
-    const nodeWithPosition = dagreGraph.node(node.id);
-    return {
-      ...node,
-      position: {
-        x: nodeWithPosition.x - (node.type === 'function' ? 90 : 60),
-        y: nodeWithPosition.y - 30,
-      },
-      targetPosition: 'left',
-      sourcePosition: 'right',
-    };
-  });
-
-  return { nodes: newNodes, edges };
+  return {
+    nodes: nodes.map((node) => {
+      const positioned = graph.node(node.id);
+      const width = node.type === 'step' ? 264 : 176;
+      const height = node.type === 'step' ? 118 : 62;
+      return {
+        ...node,
+        position: {
+          x: positioned.x - width / 2,
+          y: positioned.y - height / 2,
+        },
+        sourcePosition: 'right',
+        targetPosition: 'left',
+      };
+    }),
+    edges,
+  };
 };
 
-// Helper to assign colors to connected components
-const assignColors = (nodes, edges) => {
-  const adj = {};
-  nodes.forEach(n => adj[n.id] = []);
-  edges.forEach(e => {
-    if (adj[e.source]) adj[e.source].push(e.target);
-    if (adj[e.target]) adj[e.target].push(e.source);
+const assignComponentAccents = (nodes, edges) => {
+  const adjacency = {};
+  const colored = nodes.map((node) => ({ ...node, data: { ...node.data } }));
+
+  colored.forEach((node) => {
+    adjacency[node.id] = [];
+  });
+  edges.forEach((edge) => {
+    adjacency[edge.source]?.push(edge.target);
+    adjacency[edge.target]?.push(edge.source);
   });
 
   const visited = new Set();
-  const coloredNodes = [...nodes];
-  let colorIdx = 0;
+  let paletteIndex = 0;
+  const byId = Object.fromEntries(colored.map((node) => [node.id, node]));
 
-  for (const node of nodes) {
-    if (!visited.has(node.id)) {
-      const color = COLORS[colorIdx % COLORS.length];
-      colorIdx++;
-
-      const queue = [node.id];
-      visited.add(node.id);
-      while (queue.length > 0) {
-        const curr = queue.shift();
-        const nIndex = coloredNodes.findIndex(n => n.id === curr);
-        if (nIndex >= 0) {
-          coloredNodes[nIndex].data = { ...coloredNodes[nIndex].data, color };
-        }
-
-        if (adj[curr]) {
-          adj[curr].forEach(neighbor => {
-            if (!visited.has(neighbor)) {
-              visited.add(neighbor);
-              queue.push(neighbor);
-            }
-          });
-        }
-      }
+  colored.forEach((node) => {
+    if (visited.has(node.id)) {
+      return;
     }
-  }
-  return coloredNodes;
+
+    const accent = PALETTE[paletteIndex % PALETTE.length];
+    paletteIndex += 1;
+    const queue = [node.id];
+    visited.add(node.id);
+
+    while (queue.length > 0) {
+      const current = queue.shift();
+      if (byId[current]) {
+        byId[current].data.accent = accent;
+      }
+
+      adjacency[current]?.forEach((neighbor) => {
+        if (!visited.has(neighbor)) {
+          visited.add(neighbor);
+          queue.push(neighbor);
+        }
+      });
+    }
+  });
+
+  return colored;
 };
 
-const defaultEdgeOptions = {
-  type: 'smoothstep',
-  markerEnd: {
-    type: MarkerType.ArrowClosed,
-    width: 20,
-    height: 20,
-  },
-  style: {
-    strokeWidth: 2,
-    stroke: '#555',
-  },
-  animated: true,
+const styleEdges = (edges) =>
+  edges.map((edge) => {
+    const kind = edge.data?.kind || 'produces';
+    const base = {
+      ...edge,
+      animated: kind === 'sequence',
+      type: kind === 'sequence' ? 'smoothstep' : 'default',
+      markerEnd: {
+        type: MarkerType.ArrowClosed,
+        width: 18,
+        height: 18,
+      },
+      style: {
+        strokeWidth: kind === 'sequence' ? 1.8 : 2.3,
+        stroke: kind === 'sequence' ? '#7c6f64' : '#3f3a34',
+        strokeDasharray: kind === 'sequence' ? '6 6' : 'none',
+      },
+    };
+
+    return base;
+  });
+
+const buildLineageSet = (nodes, edges, artifactId) => {
+  if (!artifactId) {
+    return new Set(nodes.map((node) => node.id));
+  }
+
+  const forward = {};
+  const backward = {};
+  nodes.forEach((node) => {
+    forward[node.id] = [];
+    backward[node.id] = [];
+  });
+  edges.forEach((edge) => {
+    forward[edge.source]?.push(edge.target);
+    backward[edge.target]?.push(edge.source);
+  });
+
+  const visible = new Set([artifactId]);
+  const stack = [artifactId];
+
+  while (stack.length > 0) {
+    const current = stack.pop();
+    [...(forward[current] || []), ...(backward[current] || [])].forEach((neighbor) => {
+      if (!visible.has(neighbor)) {
+        visible.add(neighbor);
+        stack.push(neighbor);
+      }
+    });
+  }
+
+  return visible;
 };
+
+const formatLocation = (source) => {
+  if (!source?.file) {
+    return null;
+  }
+  const line = source.line_start ? `:${source.line_start}` : '';
+  const chunk = source.chunk ? ` (${source.chunk})` : '';
+  return `${source.file}${line}${chunk}`;
+};
+
+const summarizeDetails = (details) => (Array.isArray(details) ? details.filter(Boolean) : []);
 
 export default function App() {
+  const [graph, setGraph] = useState({ nodes: [], edges: [], meta: { documents: [], tracked_objects: [] } });
+  const [selectedId, setSelectedId] = useState(null);
+  const [focusArtifactId, setFocusArtifactId] = useState(null);
+  const [viewMode, setViewMode] = useState('all');
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
-  const [selectedNode, setSelectedNode] = useState(null);
-  const [registries, setRegistries] = useState({ functions: [], objects: [] });
 
   useEffect(() => {
-    const fetchData = async () => {
-      let data = { nodes: [], edges: [] };
+    const load = async () => {
+      let payload = { nodes: [], edges: [], meta: {} };
+
       if (window.outlinerData) {
-        data = window.outlinerData;
+        payload = window.outlinerData;
       } else {
         try {
-          const res = await fetch('/data.json');
-          if (res.ok) data = await res.json();
-        } catch (e) {
-          console.log("No data found");
+          const response = await fetch('/data.json');
+          if (response.ok) {
+            payload = await response.json();
+          }
+        } catch (error) {
+          console.error('Failed to load outliner data', error);
         }
       }
 
-      if (data.nodes && data.nodes.length > 0) {
-        // 1. Colorize
-        const coloredNodes = assignColors(data.nodes, data.edges || []);
+      const normalized = normalizeGraph(payload);
+      setGraph(normalized);
 
-        // 2. Layout
-        const layouted = getLayoutedElements(coloredNodes, data.edges || [], 'TB');
-        setNodes(layouted.nodes);
-        setEdges(layouted.edges);
-
-        // 3. Registries
-        const funcs = layouted.nodes.filter(n => n.type === 'function').map(n => ({
-          id: n.id,
-          label: n.data.label,
-          desc: n.data.short || "No description available",
-          color: n.data.color
-        }));
-
-        const objs = layouted.nodes.filter(n => n.type === 'object').map(n => ({
-          id: n.id,
-          label: n.data.label,
-          color: n.data.color
-        }));
-
-        setRegistries({ functions: funcs, objects: objs });
+      if (normalized.meta.tracked_objects.length > 0) {
+        const firstTrackedId = `artifact:${normalized.meta.tracked_objects[0].replace(/[^A-Za-z0-9_.:-]/g, '_')}`;
+        setFocusArtifactId(firstTrackedId);
+        setViewMode('lineage');
       }
     };
 
-    fetchData();
-  }, [setNodes, setEdges]);
+    load();
+  }, []);
 
-  const onConnect = useCallback(
-    (params) => setEdges((eds) => addEdge(params, eds)),
-    [setEdges],
+  const preparedGraph = useMemo(() => {
+    const coloredNodes = assignComponentAccents(graph.nodes, graph.edges);
+    const laidOut = getLayoutedElements(coloredNodes, styleEdges(graph.edges));
+    return laidOut;
+  }, [graph]);
+
+  const visibleIds = useMemo(
+    () => (viewMode === 'lineage' ? buildLineageSet(preparedGraph.nodes, preparedGraph.edges, focusArtifactId) : new Set(preparedGraph.nodes.map((node) => node.id))),
+    [preparedGraph, viewMode, focusArtifactId],
   );
 
-  const onNodeClick = useCallback((event, node) => {
-    setSelectedNode(node);
+  const visibleGraph = useMemo(() => ({
+    nodes: preparedGraph.nodes.filter((node) => visibleIds.has(node.id)),
+    edges: preparedGraph.edges.filter((edge) => visibleIds.has(edge.source) && visibleIds.has(edge.target)),
+  }), [preparedGraph, visibleIds]);
+
+  useEffect(() => {
+    setNodes(visibleGraph.nodes);
+    setEdges(visibleGraph.edges);
+  }, [visibleGraph, setNodes, setEdges]);
+
+  const selectedNode = useMemo(
+    () => preparedGraph.nodes.find((node) => node.id === selectedId) || null,
+    [preparedGraph.nodes, selectedId],
+  );
+
+  const stepRegistry = useMemo(
+    () => visibleGraph.nodes.filter((node) => node.type === 'step'),
+    [visibleGraph.nodes],
+  );
+
+  const artifactRegistry = useMemo(
+    () => preparedGraph.nodes.filter((node) => node.type === 'artifact').sort((a, b) => a.data.label.localeCompare(b.data.label)),
+    [preparedGraph.nodes],
+  );
+
+  const selectNode = useCallback((nodeId) => {
+    setSelectedId(nodeId);
   }, []);
 
-  const onPaneClick = useCallback(() => {
-    setSelectedNode(null);
+  const onNodeClick = useCallback((_, node) => {
+    setSelectedId(node.id);
+    if (node.type === 'artifact') {
+      setFocusArtifactId(node.id);
+    }
   }, []);
+
+  const clearFocus = useCallback(() => {
+    setFocusArtifactId(null);
+    setViewMode('all');
+  }, []);
+
+  const selectedLocation = selectedNode ? formatLocation(selectedNode.data.source || selectedNode.data.call_source) : null;
+  const definitionLocation = selectedNode ? formatLocation(selectedNode.data.definition_source) : null;
+  const detailItems = selectedNode ? summarizeDetails(selectedNode.data.details) : [];
 
   return (
-    <div style={{ display: 'flex', width: '100vw', height: '100vh', overflow: 'hidden' }}>
-      {/* Left Sidebar: Functions */}
-      <div style={{
-        width: '250px',
-        borderRight: '1px solid #ccc',
-        padding: '15px',
-        background: '#f8f9fa',
-        display: 'flex',
-        flexDirection: 'column',
-        zIndex: 10,
-        overflowY: 'auto'
-      }}>
-        <h3 style={{ borderBottom: '1px solid #999', paddingBottom: '10px' }}>Functions</h3>
+    <div className="app-shell">
+      <aside className="sidebar">
+        <div className="sidebar-header">
+          <p className="eyebrow">Outliner</p>
+          <h1>{graph.meta.title || 'Analysis outline'}</h1>
+          <p className="sidebar-copy">Trace annotated steps, inspect function internals, and focus on one artifact lineage when you need a publishable narrative.</p>
+        </div>
 
-        <ul style={{ listStyle: 'none', padding: 0 }}>
-          {registries.functions.map((func, i) => (
-            <li
-              key={i}
-              onClick={() => {
-                const node = nodes.find(n => n.id === func.id);
-                if (node) setSelectedNode(node);
-              }}
-              style={{
-                marginBottom: '10px',
-                padding: '8px',
-                borderLeft: `4px solid ${func.color}`,
-                background: '#fff',
-                cursor: 'pointer',
-                boxShadow: '0 1px 2px rgba(0,0,0,0.1)'
-              }}
-              onMouseEnter={(e) => e.currentTarget.style.background = '#f0f0f0'}
-              onMouseLeave={(e) => e.currentTarget.style.background = '#fff'}
-            >
-              <strong>{func.label}</strong>
-            </li>
-          ))}
-        </ul>
+        <div className="mode-switch">
+          <button className={viewMode === 'all' ? 'active' : ''} onClick={() => setViewMode('all')}>Full graph</button>
+          <button className={viewMode === 'lineage' ? 'active' : ''} onClick={() => setViewMode('lineage')}>Lineage</button>
+        </div>
 
-        {selectedNode && selectedNode.type === 'function' && (
-          <div style={{ marginTop: 'auto', paddingTop: '20px', borderTop: '2px solid #ccc' }}>
-            <h4 style={{ color: selectedNode.data.color }}>{selectedNode.data.label}</h4>
-            <p style={{ fontSize: '0.9em' }}><strong>Summary:</strong> {selectedNode.data.short}</p>
-            <details>
-              <summary>More</summary>
-              <p style={{ fontSize: '0.8em', whiteSpace: 'pre-wrap' }}>{selectedNode.data.long}</p>
-            </details>
-            <button onClick={() => setSelectedNode(null)} style={{ marginTop: '10px' }}>Close</button>
+        <section className="sidebar-section">
+          <div className="section-header">
+            <h2>Artifacts</h2>
+            {focusArtifactId && <button className="ghost-button" onClick={clearFocus}>Clear focus</button>}
+          </div>
+          <div className="artifact-list">
+            {artifactRegistry.map((artifact) => (
+              <button
+                key={artifact.id}
+                className={`artifact-chip ${focusArtifactId === artifact.id ? 'is-focused' : ''}`}
+                onClick={() => {
+                  setFocusArtifactId(artifact.id);
+                  setViewMode('lineage');
+                  selectNode(artifact.id);
+                }}
+              >
+                {artifact.data.label}
+              </button>
+            ))}
+          </div>
+        </section>
+
+        <section className="sidebar-section grow">
+          <div className="section-header">
+            <h2>Steps</h2>
+            <span>{stepRegistry.length}</span>
+          </div>
+          <div className="step-list">
+            {stepRegistry.map((step) => (
+              <button key={step.id} className={`step-card ${selectedId === step.id ? 'is-selected' : ''}`} onClick={() => selectNode(step.id)}>
+                <span className="step-card-kicker">{step.data.kind.replace(/_/g, ' ')}</span>
+                <strong>{step.data.label}</strong>
+                {step.data.summary && <span>{step.data.summary}</span>}
+                {formatLocation(step.data.call_source || step.data.source) && (
+                  <small>{formatLocation(step.data.call_source || step.data.source)}</small>
+                )}
+              </button>
+            ))}
+          </div>
+        </section>
+      </aside>
+
+      <main className="canvas-shell">
+        <div className="canvas-toolbar">
+          <div>
+            <p className="eyebrow">Documents</p>
+            <div className="document-row">
+              {graph.meta.documents.map((doc) => (
+                <span key={doc.file} className="document-chip">{doc.title}</span>
+              ))}
+            </div>
+          </div>
+          {focusArtifactId && (
+            <div className="focus-summary">
+              <span>Focused artifact</span>
+              <strong>{artifactRegistry.find((artifact) => artifact.id === focusArtifactId)?.data.label}</strong>
+            </div>
+          )}
+        </div>
+
+        <div className="canvas-frame">
+          <ReactFlow
+            nodes={nodes}
+            edges={edges}
+            onNodesChange={onNodesChange}
+            onEdgesChange={onEdgesChange}
+            nodeTypes={nodeTypes}
+            onNodeClick={onNodeClick}
+            onPaneClick={() => setSelectedId(null)}
+            fitView
+            fitViewOptions={{ padding: 0.18 }}
+          >
+            <Controls />
+            <MiniMap pannable zoomable nodeColor={(node) => node.data?.accent || '#a8a29e'} maskColor="rgba(247, 244, 236, 0.72)" />
+            <Background variant="dots" gap={20} size={1.1} color="#d6d0c4" />
+          </ReactFlow>
+          {visibleGraph.nodes.length === 0 && <div className="empty-state">No outlineable steps were found in the current view.</div>}
+        </div>
+      </main>
+
+      <aside className="detail-panel">
+        {!selectedNode && (
+          <div className="detail-placeholder">
+            <p className="eyebrow">Selection</p>
+            <h2>Pick a step or artifact</h2>
+            <p>The detail panel shows summaries, code excerpts, and source locations for whatever you select.</p>
           </div>
         )}
-      </div>
 
-      {/* Main Canvas */}
-      <div style={{ flex: 1, height: '100%', position: 'relative' }}>
-        <ReactFlow
-          nodes={nodes}
-          edges={edges}
-          onNodesChange={onNodesChange}
-          onEdgesChange={onEdgesChange}
-          onConnect={onConnect}
-          nodeTypes={nodeTypes}
-          onNodeClick={onNodeClick}
-          onPaneClick={onPaneClick}
-          defaultEdgeOptions={defaultEdgeOptions}
-          fitView
-        >
-          <Controls />
-          <MiniMap />
-          <Background variant="dots" gap={12} size={1} />
-        </ReactFlow>
-      </div>
+        {selectedNode && (
+          <div className="detail-content">
+            <p className="eyebrow">{selectedNode.type === 'step' ? 'Step' : 'Artifact'}</p>
+            <h2>{selectedNode.data.label}</h2>
+            {selectedNode.data.summary && <p className="detail-summary">{selectedNode.data.summary}</p>}
 
-      {/* Right Sidebar: Data Objects */}
-      <div style={{
-        width: '200px',
-        borderLeft: '1px solid #ccc',
-        padding: '15px',
-        background: '#fff',
-        display: 'flex',
-        flexDirection: 'column',
-        zIndex: 10,
-        overflowY: 'auto'
-      }}>
-        <h3 style={{ borderBottom: '1px solid #999', paddingBottom: '10px' }}>Data</h3>
-        <ul style={{ listStyle: 'none', padding: 0 }}>
-          {registries.objects.map((obj, i) => (
-            <li
-              key={i}
-              onClick={() => {
-                const node = nodes.find(n => n.id === obj.id);
-                if (node) setSelectedNode(node);
-              }}
-              style={{
-                marginBottom: '10px',
-                padding: '8px',
-                borderRight: `4px solid ${obj.color}`,
-                background: '#fefefe',
-                cursor: 'pointer',
-                fontSize: '0.9em',
-                border: '1px solid #eee',
-                borderRightWidth: '4px'
-              }}
-              onMouseEnter={(e) => e.currentTarget.style.background = '#f0f0f0'}
-              onMouseLeave={(e) => e.currentTarget.style.background = '#fefefe'}
-            >
-              {obj.label}
-            </li>
-          ))}
-        </ul>
-      </div>
+            <div className="detail-meta">
+              {selectedNode.data.function_name && <span>Function: {selectedNode.data.function_name}</span>}
+              {selectedLocation && <span>{selectedLocation}</span>}
+              {definitionLocation && <span>Definition: {definitionLocation}</span>}
+            </div>
+
+            {detailItems.length > 0 && (
+              <section className="detail-section">
+                <h3>Narrative</h3>
+                <ul>
+                  {detailItems.map((item, index) => <li key={index}>{item}</li>)}
+                </ul>
+              </section>
+            )}
+
+            {selectedNode.type === 'step' && (
+              <>
+                <section className="detail-section grid">
+                  <div>
+                    <h3>Inputs</h3>
+                    <p>{[].concat(selectedNode.data.inputs || []).filter(Boolean).join(', ') || 'None recorded'}</p>
+                  </div>
+                  <div>
+                    <h3>Outputs</h3>
+                    <p>{[].concat(selectedNode.data.outputs || []).filter(Boolean).join(', ') || 'None recorded'}</p>
+                  </div>
+                  <div>
+                    <h3>Modifies</h3>
+                    <p>{[].concat(selectedNode.data.modifies || []).filter(Boolean).join(', ') || 'No explicit modification list'}</p>
+                  </div>
+                  <div>
+                    <h3>Kind</h3>
+                    <p>{selectedNode.data.kind.replace(/_/g, ' ')}</p>
+                  </div>
+                </section>
+
+                <section className="detail-section">
+                  <h3>Code</h3>
+                  <pre>{selectedNode.data.code || selectedNode.data.invocation_code || 'No code excerpt available.'}</pre>
+                </section>
+
+                {selectedNode.data.invocation_code && selectedNode.data.invocation_code !== selectedNode.data.code && (
+                  <section className="detail-section">
+                    <h3>Invocation</h3>
+                    <pre>{selectedNode.data.invocation_code}</pre>
+                  </section>
+                )}
+              </>
+            )}
+          </div>
+        )}
+      </aside>
     </div>
   );
 }

@@ -4,6 +4,7 @@ options(browser = function(url) message(paste("BROWSER OPEN:", url)))
 # Source package functions
 source("R/parser_meta.R")
 source("R/parser_flow.R")
+source("R/outline_parser.R")
 source("R/visualizer.R")
 
 # Source example functions so they are in the environment (for metadata extraction)

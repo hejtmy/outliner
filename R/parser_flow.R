@@ -270,3 +270,9 @@ parse_script_flow <- function(file) {
 
     list(nodes = nodes, edges = edges)
 }
+
+# Keep the public parser entry point aligned with the new annotation-first graph
+# builder even if callers invoke `parse_script_flow()` directly.
+parse_script_flow <- function(file) {
+    parse_script_outline(file)
+}

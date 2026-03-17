@@ -1,127 +1,225 @@
 # outliner
 
-**outliner** is an R package designed to solve the issue of data processing obfuscation inside custom functions. It parses your R scripts and function definitions to generate an interactive node-graph visualization of your data pipeline using [React Flow](https://reactflow.dev/).
+**outliner** is an annotation-first R package for documenting and visualizing analysis pipelines.
 
-## Features
+The package is built for research code that should remain valid R code even when `outliner` is not installed. Instead of runtime wrappers or special tracking functions, users add lightweight comment annotations to scripts, functions, and notebook chunks. `outliner` then parses those comments, links them to assignments and function calls, and renders the result as an interactive graph of:
 
-- **Metadata Extraction**: Define function metadata (Name, Short Description, Long Description) directly inside your R functions using a simple string syntax.
-- **Pipeline Tracing**: Automatically detects assignments and pipe (`|>`) connections in your scripts to build the flow.
-- **Interactive Visualization**: clearer understanding of complex data transformations through an interactive web interface.
+- **steps**: annotated transformations, code blocks, or function internals
+- **artifacts**: data objects that move through the pipeline
+- **lineage**: the path of one object through successive processing steps
 
-## Installation
+The goal is to reduce the obfuscation created by helper functions, make complex preprocessing pipelines inspectable, and provide a clearer public-facing overview of how a dataset changes during an analysis.
 
-You can install the development version of this package locally:
+## Design Principles
+
+- **No runtime dependency in user code**: comments decorate code, but do not change how it runs.
+- **Annotation-first**: explicit comments drive the narrative shown in the graph.
+- **Static fallback**: when annotations are missing, `outliner` still infers simple assignments and function calls.
+- **Research-friendly output**: the frontend is meant to support both internal debugging and publishable pipeline overviews.
+
+## Annotation Syntax
+
+Use `# @outliner_step` comment blocks immediately before the expression or code block you want to describe.
+
+### In functions
 
 ```r
-# Assuming you are in the package root directory
-devtools::install()
+clean_missing <- function(df) {
+  # @outliner_step
+  # label: Drop incomplete measurements
+  # summary: Remove rows with missing values in the metric column
+  # modifies: df
+  # details:
+  # - keep only rows where the metric is observed
+  # - preserve the original columns for later normalization
+  df[!is.na(df$metric), ]
+}
 ```
 
-Or load it directly for development:
+### In scripts
+
+```r
+# @outliner_step
+# label: Merge baseline sources
+# inputs: demo, labs
+# outputs: baseline
+baseline <- merge(demo, labs, by = "id")
+```
+
+### In Rmd/Qmd chunks
+
+Annotations can appear inside R code chunks in the same form:
+
+```r
+# @outliner_step
+# label: Fit primary model
+# inputs: analysis_df
+# outputs: model_fit
+# summary: Estimate the main treatment effect
+model_fit <- lm(y ~ trt + age + sex, data = analysis_df)
+```
+
+### Supported fields
+
+- `label`: step title shown in the graph
+- `summary`: short description shown in the node and side panel
+- `details`: bullet-like narrative lines shown in the detail panel
+- `inputs`: explicit input artifacts
+- `outputs`: explicit output artifacts
+- `modifies`: artifacts or parameters changed internally
+- `section`: optional grouping label
+- `tags`: comma-separated tags
+- `publish`: `true` or `false`
+
+## Object Tracking
+
+To focus on specific artifacts, add a tracking header to the top of the root script or document.
+
+For an R script:
+
+```r
+# @outliner_track: raw, cleaned, final
+```
+
+For Rmd/Qmd frontmatter:
+
+```yaml
+outliner_track: [raw, cleaned, final]
+```
+
+The current frontend also lets you focus on any artifact interactively, even without the header.
+
+## Quick Start
+
+```r
+devtools::load_all(".")
+serve_outline("vignettes/repro_example/analysis.R")
+```
+
+That will:
+
+1. parse the root analysis file
+2. recursively inspect `source()`d helper files
+3. expand annotated function internals into step nodes
+4. open the React-based visualizer in a browser
+
+## Local Development
+
+### Prerequisites
+
+- R
+- `devtools` for local package loading
+- Node.js and npm for the frontend
+
+### Backend development
+
+From the repository root:
 
 ```r
 devtools::load_all(".")
 ```
 
-## Usage
-
-### 1. Define Your Functions with Metadata
-
-Add a string literal as the **first expression** in your function body. Use keys starting with a colon (`:`) to define metadata.
+Useful entry points:
 
 ```r
-clean_data <- function(df) {
-  "
-  :name: Clean Data
-  :short: Remove NAs and outliers
-  :long: This function removes rows with missing values and filters outliers 
-         based on the Z-score of the 'value' column.
-  "
-  # Your code here
-  df[!is.na(df$value), ]
-}
+# Returns the graph payload as an R list
+outline_process("vignettes/repro_example/analysis.R")
+
+# Starts the local server and browser UI
+serve_outline("vignettes/repro_example/analysis.R")
 ```
 
-**Supported Keys:**
-- `:name`: The display label for the node.
-- `:short`: A brief summary shown on the node.
-- `:long`: detailed description shown when expanding the node.
+### Frontend development
 
-### 2. Write Your Analysis Script
+From `inst/app`:
 
-Create a standard R script (or use an existing one) that calls your functions.
+```bash
+npm install
+npm run dev
+```
+
+The Vite app reads mock data from `inst/app/public/data.json` when `window.outlinerData` is not injected by R.
+
+To build the frontend:
+
+```bash
+npm run build
+```
+
+Then copy the build output into `inst/www` so the R package serves the latest static assets:
+
+```powershell
+Copy-Item -Path dist\* -Destination ..\www -Recurse -Force
+```
+
+## Running and Testing Locally
+
+### Fast parser check
+
+This exercises the static parser without starting the blocking HTTP server:
+
+```powershell
+Rscript -e "source('R/parser_meta.R'); source('R/parser_flow.R'); source('R/outline_parser.R'); source('R/visualizer.R'); str(outline_process('vignettes/repro_example/analysis.R'), max.level = 2)"
+```
+
+### End-to-end package UI
 
 ```r
-# analysis_script.R
-data <- read.csv("raw_data.csv")
-clean <- clean_data(data)
-result <- analyze_metric(clean)
+devtools::load_all(".")
+serve_outline("vignettes/repro_example/analysis.R")
 ```
 
-### 3. Visualize the Flow
+### Verification script
 
-Use `serve_outline` to parse the script and open the visualization in your browser.
+The repository includes `verify_script.R`, which sources the package files and runs the example:
 
 ```r
-library(outliner)
-serve_outline("analysis_script.R")
-```
-
-### 4. Object Tracking (Optional)
-
-To focus the visualization on specific data objects and ignore others, add a tracking header to the top of your file.
-
-**For R Scripts:**
-Use a comment header:
-```r
-# @outliner_track: data, model, results
-```
-
-**For RMD/QMD Files:**
-Use the same comment header, or a YAML-style property in the document frontmatter:
-```yaml
-outliner_track: [data, model, results]
-```
-
-When this header is present, the parser will **only** generate nodes for the specified objects and any functions that interact with them, filtering out all other variables.
-
-## Example
-
-A reproducible example is included in `vignettes/repro_example`.
-
-```r
-# Load the package
-devtools::load_all()
-
-# Run the verification script which runs the example
 source("verify_script.R")
 ```
 
-## Project Structure (For Developers)
+Note that `serve_outline()` is a blocking server loop. Stop it with `Esc` in an interactive session.
 
-This project combines an R package with a React frontend.
+### Frontend production build check
 
+From `inst/app`:
+
+```bash
+npm run build
 ```
+
+If the build succeeds, the React app is valid and ready to copy into `inst/www`.
+
+## Project Structure
+
+```text
 outliner/
-├── R/
-│   ├── parser_meta.R   # Extracts metadata from function bodies
-│   ├── parser_flow.R   # AST parser for tracking data flow in scripts
-│   └── visualizer.R    # Generates JSON data and serves the web app via httpuv
-├── inst/
-│   ├── app/            # Source code for the React Application (Vite project)
-│   │   ├── src/        # React components (App.jsx, CustomNode.jsx)
-│   │   └── package.json
-│   └── www/            # Compiled static assets (HTML/JS/CSS) served by R
-└── vignettes/
-     └── repro_example/ # Sample project for testing and verification
+|- R/
+|  |- outline_parser.R   # Annotation-first parser and graph builder
+|  |- parser_meta.R      # Annotation parsing helpers + legacy string metadata support
+|  |- parser_flow.R      # Public compatibility entry point
+|  |- visualizer.R       # Graph generation and local server
+|- inst/
+|  |- app/               # React + Vite source
+|  |- www/               # Built static app served by the R package
+|- vignettes/
+|  |- repro_example/     # Example analysis and helper functions
+|- verify_script.R       # Local verification helper
 ```
 
-### Development Workflow
+## Current Scope and Limits
 
-1.  **Modify R Code**: Changes in `R/` are standard. Reload with `devtools::load_all()`.
-2.  **Modify Frontend**:
-    -   Navigate to `inst/app` and run `npm install` if needed.
-    -   Run `npm run dev` to develop locally (mock data required in `public/data.json`).
-    -   Run `npm run build` to compile the app to `dist/`.
-    -   **Important**: Copy the contents of `inst/app/dist` to `inst/www` so the R package can serve the updated version.
-3.  **Run Verification**: Use `verifiy_script.R` to test the end-to-end flow.
+The new parser is intentionally less magical than a full static analysis engine.
+
+It works best when:
+
+- important transformations are annotated with `# @outliner_step`
+- helper functions are brought in through plain `source("file.R")`
+- pipelines are mostly linear assignments or pipe chains
+
+It is still heuristic for:
+
+- complex control flow
+- deep nonstandard evaluation
+- multi-expression chunk-level grouping without explicit annotations on each step
+
+Legacy string-literal metadata inside functions is still supported as a fallback, but comment annotations are now the preferred path.
